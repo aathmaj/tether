@@ -1,0 +1,13 @@
+# Sensitive Keys
+.env
+*.pyc
+
+# Local Data (Don't upload your friend's renders)
+node_data/
+jobs/
+results/
+__pycache__/
+
+# Large Files
+*.blend
+*.zip
