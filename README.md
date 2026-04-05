@@ -2,12 +2,12 @@
 
 # Tether: Decentralized P2P Compute Fabric
 
-Tether is a decentralized compute coordination layer for Blender rendering jobs. It has two runtime components:
+Tether is a decentralized compute coordination layer for Blender rendering jobs. Targeting the $2.3B render farm market and the 10M+ global Blender user base, Tether's core innovation is capturing "spare headroom"—utilizing partial GPU/CPU resources from actively used machines rather than waiting for machines to go completely idle. It has two runtime components:
 
 - Orchestrator: a FastAPI control plane that tracks workers, schedules frame chunks, leases tasks, and stores output artifacts.
 - Node Agent: a worker daemon that registers with the orchestrator, claims render tasks, executes Blender in Docker, and uploads validated artifacts.
 
-## What Is New (Production ready (commit by cosmic-hydra)
+## What Is New (Production ready (commit by cosmic-hydra))
 
 This repository now includes a production-style orchestration flow instead of a one-shot MVP script.
 
@@ -141,3 +141,5 @@ Workers continuously:
 - Multi-tenant auth with per-tenant quotas and billing.
 - Redundant verification runs for anti-cheat and confidence scoring.
 - Plugin integration for direct Blender submit and status sync.
+- Two-token economic model to protect buyers from crypto-market volatility while adequately incentivizing supply.
+- Workload Expansion (AI Inference model caching + FFmpeg Video Transcoding)
