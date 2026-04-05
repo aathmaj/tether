@@ -7,7 +7,7 @@ Tether is a decentralized compute coordination layer for Blender rendering jobs.
 - Orchestrator: a FastAPI control plane that tracks workers, schedules frame chunks, leases tasks, and stores output artifacts.
 - Node Agent: a worker daemon that registers with the orchestrator, claims render tasks, executes Blender in Docker, and uploads validated artifacts.
 
-## What Is New (Production ready (new commit by me --> cosmic-hydra))
+## What Is New (Production ready (commit by cosmic-hydra)
 
 This repository now includes a production-style orchestration flow instead of a one-shot MVP script.
 
