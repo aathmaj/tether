@@ -7,6 +7,9 @@ node_data/
 jobs/
 results/
 __pycache__/
+orchestrator_state.db
+orchestrator_state.db-shm
+orchestrator_state.db-wal
 
 # Large Files
 *.blend
