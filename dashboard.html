@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tether — Fleet Dashboard</title>
+<style>
+  :root {
+    --bg:      #F8F9FC;
+    --card:    #FFFFFF;
+    --card2:   #F1F5F9;
+    --border:  #E2E8F0;
+    --text:    #1E293B;
+    --sub:     #64748B;
+    --accent:  #6D28D9;
+    --cyan:    #0891B2;
+    --green:   #059669;
+    --amber:   #D97706;
+    --red:     #DC2626;
+    --blue:    #2563EB;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); font-size: 14px; }
+
+  /* ── Layout ── */
+  .header { background: var(--card); border-bottom: 1px solid var(--border);
+            padding: 14px 24px; display: flex; align-items: center; gap: 16px; }
+  .header h1 { font-size: 18px; font-weight: 700; }
+  .header .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green);
+                 animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
+  .header .url-badge { font-size: 12px; background: var(--card2); border: 1px solid var(--border);
+                        border-radius: 6px; padding: 4px 10px; color: var(--sub); cursor: pointer; }
+  .header .refresh-badge { margin-left: auto; font-size: 12px; color: var(--sub); }
+
+  .main { padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+
+  /* ── Stat cards ── */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+               padding: 16px; }
+  .stat-card .label { font-size: 11px; color: var(--sub); text-transform: uppercase;
+                       letter-spacing: .05em; margin-bottom: 6px; }
+  .stat-card .value { font-size: 28px; font-weight: 700; line-height: 1; }
+  .stat-card .sub   { font-size: 11px; color: var(--sub); margin-top: 4px; }
+  .stat-card.accent { border-left: 3px solid var(--accent); }
+  .stat-card.green  { border-left: 3px solid var(--green); }
+  .stat-card.amber  { border-left: 3px solid var(--amber); }
+  .stat-card.red    { border-left: 3px solid var(--red); }
+  .stat-card.cyan   { border-left: 3px solid var(--cyan); }
+  .stat-card.blue   { border-left: 3px solid var(--blue); }
+
+  /* ── Section titles ── */
+  .section-title { font-size: 13px; font-weight: 600; color: var(--sub);
+                   text-transform: uppercase; letter-spacing: .05em; margin-bottom: 10px; }
+
+  /* ── Worker cards ── */
+  .workers { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .worker-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+                 padding: 14px; }
+  .worker-card .wrow { display: flex; justify-content: space-between; align-items: center;
+                        margin-bottom: 6px; }
+  .worker-card .name { font-weight: 600; font-size: 13px; }
+  .worker-card .meta { font-size: 11px; color: var(--sub); }
+  .bar-wrap { background: var(--card2); border-radius: 4px; height: 6px; margin: 4px 0; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width .4s ease; }
+
+  /* ── Jobs table ── */
+  .jobs-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+               overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { background: var(--card2); text-align: left; padding: 10px 14px;
+             font-size: 11px; color: var(--sub); font-weight: 600;
+             text-transform: uppercase; letter-spacing: .05em; }
+  tbody tr { border-top: 1px solid var(--border); }
+  tbody tr:hover { background: var(--card2); }
+  td { padding: 10px 14px; font-size: 13px; }
+  td .job-id { font-family: monospace; font-size: 12px; color: var(--accent); cursor: pointer; }
+  td .job-id:hover { text-decoration: underline; }
+
+  /* ── Status badges ── */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px;
+           font-weight: 600; }
+  .badge.pending   { background: #FEF9C3; color: #854D0E; }
+  .badge.running   { background: #DBEAFE; color: #1D4ED8; }
+  .badge.stitching { background: #CFFAFE; color: #155E75; }
+  .badge.complete  { background: #DCFCE7; color: #166534; }
+  .badge.failed    { background: #FEE2E2; color: #991B1B; }
+  .badge.conflict  { background: #F3E8FF; color: #6D28D9; }
+  .badge.ready     { background: #DCFCE7; color: #166534; }
+  .badge.busy      { background: #DBEAFE; color: #1D4ED8; }
+  .badge.stale     { background: #F1F5F9; color: #64748B; }
+  .badge.error     { background: #FEE2E2; color: #991B1B; }
+
+  /* ── Progress bar in table ── */
+  .prog-wrap { display: flex; align-items: center; gap: 8px; }
+  .prog-bar { flex: 1; background: var(--card2); border-radius: 4px; height: 8px; overflow: hidden; }
+  .prog-fill { height: 100%; border-radius: 4px; background: var(--accent);
+               transition: width .5s ease; }
+  .prog-fill.complete { background: var(--green); }
+  .prog-fill.failed   { background: var(--red); }
+  .prog-pct { font-size: 12px; color: var(--sub); min-width: 32px; text-align: right; }
+
+  /* ── Gantt ── */
+  .gantt-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+                padding: 16px; display: none; }
+  .gantt-wrap.visible { display: block; }
+  .gantt-title { font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .gantt-close { margin-left: auto; cursor: pointer; color: var(--sub); font-size: 18px; line-height: 1; }
+  .gantt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .gantt-label { font-size: 11px; color: var(--sub); min-width: 80px; flex-shrink: 0;
+                 font-family: monospace; }
+  .gantt-track { flex: 1; background: var(--card2); border-radius: 4px; height: 22px;
+                 position: relative; overflow: hidden; }
+  .gantt-block { position: absolute; height: 100%; border-radius: 3px; display: flex;
+                 align-items: center; padding: 0 6px; font-size: 10px; color: white;
+                 font-weight: 600; white-space: nowrap; overflow: hidden; }
+
+  /* ── Config modal ── */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.3);
+                   z-index: 100; align-items: center; justify-content: center; }
+  .modal-overlay.visible { display: flex; }
+  .modal { background: var(--card); border-radius: 12px; padding: 24px; width: 360px;
+           box-shadow: 0 10px 40px rgba(0,0,0,.15); }
+  .modal h2 { font-size: 16px; margin-bottom: 16px; }
+  .modal label { display: block; font-size: 12px; color: var(--sub); margin-bottom: 4px; }
+  .modal input { width: 100%; border: 1px solid var(--border); border-radius: 6px;
+                 padding: 8px 10px; font-size: 13px; margin-bottom: 12px; }
+  .modal input:focus { outline: none; border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .btn { padding: 8px 18px; border-radius: 6px; border: none; cursor: pointer;
+         font-size: 13px; font-weight: 600; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-secondary { background: var(--card2); color: var(--text); border: 1px solid var(--border); }
+
+  /* ── Toast ── */
+  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--text); color: white;
+           padding: 10px 18px; border-radius: 8px; font-size: 13px; opacity: 0;
+           transition: opacity .3s; pointer-events: none; z-index: 200; }
+  .toast.show { opacity: 1; }
+
+  /* ── Empty state ── */
+  .empty { text-align: center; padding: 40px; color: var(--sub); }
+  .empty .icon { font-size: 36px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="dot" id="connDot"></div>
+  <h1>Tether</h1>
+  <span class="url-badge" id="urlBadge" onclick="openConfig()">⚙ localhost:8000</span>
+  <span class="refresh-badge" id="refreshBadge">Connecting...</span>
+</div>
+
+<!-- Main content -->
+<div class="main">
+
+  <!-- Stat cards -->
+  <div>
+    <div class="section-title">Overview</div>
+    <div class="stats" id="statsGrid">
+      <div class="stat-card accent"><div class="label">Total Jobs</div><div class="value" id="s-jobs-total">—</div></div>
+      <div class="stat-card blue"><div class="label">Running</div><div class="value" id="s-jobs-running">—</div></div>
+      <div class="stat-card cyan"><div class="label">Stitching</div><div class="value" id="s-jobs-stitching">—</div></div>
+      <div class="stat-card green"><div class="label">Complete</div><div class="value" id="s-jobs-complete">—</div></div>
+      <div class="stat-card red"><div class="label">Failed</div><div class="value" id="s-jobs-failed">—</div></div>
+      <div class="stat-card amber"><div class="label">Workers</div><div class="value" id="s-workers-total">—</div><div class="sub" id="s-workers-sub">—</div></div>
+      <div class="stat-card green"><div class="label">Tasks Done</div><div class="value" id="s-tasks-complete">—</div><div class="sub" id="s-tasks-sub">—</div></div>
+      <div class="stat-card accent"><div class="label">Queue Depth</div><div class="value" id="s-stitch-queue">—</div><div class="sub">stitch queue</div></div>
+    </div>
+  </div>
+
+  <!-- Workers -->
+  <div>
+    <div class="section-title">Node Fleet</div>
+    <div class="workers" id="workersGrid">
+      <div class="empty"><div class="icon">🖥</div>No workers registered yet</div>
+    </div>
+  </div>
+
+  <!-- Gantt (hidden by default) -->
+  <div class="gantt-wrap" id="ganttWrap">
+    <div class="gantt-title">
+      <span id="ganttTitle">Task Timeline</span>
+      <span class="gantt-close" onclick="closeGantt()">×</span>
+    </div>
+    <div id="ganttBody"></div>
+  </div>
+
+  <!-- Jobs table -->
+  <div>
+    <div class="section-title">Jobs</div>
+    <div class="jobs-wrap">
+      <table>
+        <thead>
+          <tr>  
+            <th>Job ID</th>
+            <th>File</th>
+            <th>Frames</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>Tasks</th>
+            <th>Replicas</th>
+            <th>Verify</th>
+          </tr>
+        </thead>
+        <tbody id="jobsBody">
+          <tr><td colspan="8"><div class="empty"><div class="icon">📋</div>No jobs yet</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- Config modal -->
+<div class="modal-overlay" id="configModal">
+  <div class="modal">
+    <h2>⚙ Orchestrator Settings</h2>
+    <label>Orchestrator URL</label>
+    <input type="text" id="inputUrl" placeholder="http://localhost:8000" />
+    <label>API Key (optional)</label>
+    <input type="password" id="inputKey" placeholder="Leave blank if not set" />
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeConfig()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveConfig()">Save & Reconnect</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+let config = {
+  url: localStorage.getItem('tether_url') || 'http://localhost:8000',
+  key: localStorage.getItem('tether_key') || '',
+};
+let refreshInterval = null;
+let selectedJobId   = null;
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function showToast(msg, duration = 2500) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), duration);
+}
+
+// ── Config modal ──────────────────────────────────────────────────────────────
+function openConfig() {
+  document.getElementById('inputUrl').value = config.url;
+  document.getElementById('inputKey').value = config.key;
+  document.getElementById('configModal').classList.add('visible');
+}
+function closeConfig() {
+  document.getElementById('configModal').classList.remove('visible');
+}
+function saveConfig() {
+  config.url = document.getElementById('inputUrl').value.trim().replace(/\/+$/, '');
+  config.key = document.getElementById('inputKey').value.trim();
+  localStorage.setItem('tether_url', config.url);
+  localStorage.setItem('tether_key', config.key);
+  document.getElementById('urlBadge').textContent = '⚙ ' + config.url.replace('http://', '').replace('https://', '');
+  closeConfig();
+  refresh();
+  showToast('Settings saved');
+}
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function apiFetch(path) {
+  const headers = {};
+  if (config.key) headers['X-API-Key'] = config.key;
+  const r = await fetch(config.url + path, { headers });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+// ── Render helpers ────────────────────────────────────────────────────────────
+function badge(status) {
+  return `<span class="badge ${status}">${status}</span>`;
+}
+
+function progressBar(job) {
+  const tasks = job.tasks || [];
+  const done  = tasks.filter(t => t.status === 'complete').length;
+  const total = tasks.length || 1;
+  const pct   = Math.round(done / total * 100);
+  const cls   = job.status === 'complete' ? 'complete' : job.status === 'failed' ? 'failed' : '';
+  return `<div class="prog-wrap">
+    <div class="prog-bar"><div class="prog-fill ${cls}" style="width:${pct}%"></div></div>
+    <span class="prog-pct">${pct}%</span>
+  </div>`;
+}
+
+function cpuBar(pct, color) {
+  return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+    <span style="font-size:11px;color:var(--sub);min-width:32px">${Math.round(pct)}%</span>
+    <div class="bar-wrap" style="flex:1"><div class="bar-fill" style="width:${Math.min(pct,100)}%;background:${color}"></div></div>
+  </div>`;
+}
+
+// ── Metrics ───────────────────────────────────────────────────────────────────
+function updateMetrics(m) {
+  document.getElementById('s-jobs-total').textContent     = m.jobs_total;
+  document.getElementById('s-jobs-running').textContent   = m.jobs_running;
+  document.getElementById('s-jobs-stitching').textContent = m.jobs_stitching || 0;
+  document.getElementById('s-jobs-complete').textContent  = m.jobs_complete;
+  document.getElementById('s-jobs-failed').textContent    = m.jobs_failed;
+  document.getElementById('s-workers-total').textContent  = m.workers_total;
+  document.getElementById('s-workers-sub').textContent    = `${m.workers_ready} ready · ${m.workers_busy} busy`;
+  document.getElementById('s-tasks-complete').textContent = m.tasks_complete;
+  document.getElementById('s-tasks-sub').textContent      = `of ${m.tasks_total} tasks`;
+  document.getElementById('s-stitch-queue').textContent   = m.stitch_queue_depth || 0;
+}
+
+// ── Workers ───────────────────────────────────────────────────────────────────
+function renderWorkers(workers) {
+  const grid = document.getElementById('workersGrid');
+  if (!workers.length) {
+    grid.innerHTML = '<div class="empty"><div class="icon">🖥</div>No workers registered yet</div>';
+    return;
+  }
+  grid.innerHTML = workers.map(w => {
+    const cpu  = w.cpu_percent || 0;
+    const gpu  = w.gpu_percent || 0;
+    const seen = new Date(w.last_seen_at);
+    const ago  = Math.round((Date.now() - seen.getTime()) / 1000);
+    const agoStr = ago < 60 ? `${ago}s ago` : `${Math.round(ago/60)}m ago`;
+    const task = w.active_task_id ? w.active_task_id.slice(0,8) + '...' : '—';
+
+    return `<div class="worker-card">
+      <div class="wrow">
+        <div>
+          <div class="name">${w.hostname}</div>
+          <div class="meta">${w.worker_id.slice(0,8)}... · ${w.cpu_cores} cores · ${Math.round(w.memory_mb/1024)}GB RAM${w.gpu_vram_mb ? ` · ${w.gpu_vram_mb}MB VRAM` : ''}</div>
+        </div>
+        ${badge(w.status)}
+      </div>
+      <div class="meta" style="margin-bottom:6px">CPU ${cpuBar(cpu, 'var(--accent)')}GPU ${cpuBar(gpu, 'var(--cyan)')}</div>
+      <div class="meta">Task: <b>${task}</b> · Last seen: ${agoStr}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Jobs table ────────────────────────────────────────────────────────────────
+function renderJobs(jobs) {
+  const tbody = document.getElementById('jobsBody');
+  if (!jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="icon">📋</div>No jobs yet</div></td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = jobs.map(job => {
+    const tasks     = job.tasks || [];
+    const done      = tasks.filter(t => t.status === 'complete').length;
+    const conflicts = tasks.filter(t => t.status === 'conflict').length;
+    const verBadge  = conflicts > 0 ? badge('conflict') : (job.replication_factor > 1 ? badge('complete') : '—');
+
+    return `<tr>
+      <td><span class="job-id" onclick="showGantt('${job.job_id}', '${job.file_name}')">${job.job_id.slice(0,8)}...</span></td>
+      <td>${job.file_name.slice(0, 22)}</td>
+      <td>${job.frame_start}–${job.frame_end}</td>
+      <td>${badge(job.status)}</td>
+      <td>${progressBar(job)}</td>
+      <td>${done}/${tasks.length}</td>
+      <td>${job.replication_factor}×</td>
+      <td>${verBadge}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Gantt chart ───────────────────────────────────────────────────────────────
+function showGantt(jobId, fileName) {
+  selectedJobId = jobId;
+  const job = cachedJobs.find(j => j.job_id === jobId);
+  if (!job) return;
+
+  document.getElementById('ganttTitle').textContent = `Task Timeline — ${fileName} (${job.tasks.length} chunks)`;
+  renderGantt(job);
+  document.getElementById('ganttWrap').classList.add('visible');
+  document.getElementById('ganttWrap').scrollIntoView({ behavior: 'smooth' });
+}
+
+function closeGantt() {
+  selectedJobId = null;
+  document.getElementById('ganttWrap').classList.remove('visible');
+}
+
+const STATUS_COLORS = {
+  queued:   '#CBD5E1',
+  running:  '#93C5FD',
+  complete: '#6EE7B7',
+  failed:   '#FCA5A5',
+  conflict: '#C4B5FD',
+};
+
+function renderGantt(job) {
+  const body  = document.getElementById('ganttBody');
+  const tasks = job.tasks || [];
+  if (!tasks.length) { body.innerHTML = '<div class="empty">No tasks</div>'; return; }
+
+  const created   = new Date(job.created_at).getTime();
+  const now       = Date.now();
+  const totalSpan = Math.max(now - created, 1);
+
+  body.innerHTML = tasks.map((task, i) => {
+    const replicas = task.replicas || [];
+    const replicaRows = replicas.map((r, ri) => {
+      const color = STATUS_COLORS[r.status] || '#CBD5E1';
+      let left = 0, width = 5;
+
+      if (r.completed_at) {
+        const end   = new Date(r.completed_at).getTime();
+        // estimate start from lease expiry or job created
+        const start = created + (end - created) * 0.1 * (i + 1);
+        left  = Math.max(0, (start - created) / totalSpan * 100);
+        width = Math.max(2, (end - start) / totalSpan * 100);
+      } else if (r.status === 'running') {
+        left  = (now - totalSpan * 0.2 - created) / totalSpan * 100;
+        width = (now - created) / totalSpan * 100 - left;
+      } else {
+        return `<div class="gantt-row">
+          <div class="gantt-label">${task.task_id.slice(0,6)} r${ri}</div>
+          <div class="gantt-track"><div class="gantt-block" style="width:4%;background:${color};left:0">${r.status}</div></div>
+        </div>`;
+      }
+
+      left  = Math.min(Math.max(left, 0), 98);
+      width = Math.min(width, 100 - left);
+
+      return `<div class="gantt-row">
+        <div class="gantt-label">${task.task_id.slice(0,6)} r${ri}</div>
+        <div class="gantt-track">
+          <div class="gantt-block" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%;background:${color}">
+            ${task.frame_start}–${task.frame_end}
+          </div>
+        </div>
+      </div>`;
+    });
+
+    return replicaRows.join('');
+  }).join('');
+
+  // Legend
+  body.innerHTML += `<div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap">
+    ${Object.entries(STATUS_COLORS).map(([s, c]) =>
+      `<span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--sub)">
+        <span style="width:12px;height:12px;border-radius:2px;background:${c};display:inline-block"></span>${s}
+      </span>`
+    ).join('')}
+  </div>`;
+}
+
+// ── Main refresh loop ─────────────────────────────────────────────────────────
+let cachedJobs = [];
+
+async function refresh() {
+  const badge  = document.getElementById('refreshBadge');
+  const dot    = document.getElementById('connDot');
+  const urlBdg = document.getElementById('urlBadge');
+
+  try {
+    const [metrics, workers, jobs] = await Promise.all([
+      apiFetch('/metrics'),
+      apiFetch('/workers'),
+      apiFetch('/jobs'),
+    ]);
+
+    cachedJobs = jobs;
+
+    updateMetrics(metrics);
+    renderWorkers(workers);
+    renderJobs(jobs);
+
+    // Refresh gantt if open
+    if (selectedJobId) {
+      const job = jobs.find(j => j.job_id === selectedJobId);
+      if (job) renderGantt(job);
+    }
+
+    dot.style.background = 'var(--green)';
+    badge.textContent    = 'Updated ' + new Date().toLocaleTimeString();
+    urlBdg.textContent   = '⚙ ' + config.url.replace('http://', '').replace('https://', '');
+
+  } catch (err) {
+    dot.style.background = 'var(--red)';
+    badge.textContent    = 'Disconnected — ' + err.message;
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.getElementById('urlBadge').textContent =
+  '⚙ ' + config.url.replace('http://','').replace('https://','');
+
+refresh();
+refreshInterval = setInterval(refresh, 4000);   // refresh every 4 seconds
+</script>
+</body>
+</html>
