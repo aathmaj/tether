@@ -92,6 +92,8 @@ def upload(
         result = api_post("/upload", files={"file": (blend_file.name, f, "application/octet-stream")})
 
     rprint(f"[green] Uploaded:[/green] {result['file_name']}  sha256={result['sha256'][:12]}...")
+    rprint(f"[cyan] Upload token:[/cyan] {result['upload_token']}")
+    rprint(f"[dim] Expires at:[/dim] {result['expires_at']}")
 
 
 @app.command()
@@ -105,18 +107,28 @@ def submit(
     fps:        int  = typer.Option(24,  "--fps",                 help="Output video FPS"),
     no_stitch:  bool = typer.Option(False, "--no-stitch",         help="Skip FFmpeg assembly step"),
     auto_upload: bool = typer.Option(True, "--auto-upload/--no-auto-upload", help="Auto-upload .blend if not on server"),
+    upload_token: str = typer.Option("", "--token", help="Upload token returned by /upload (required with --no-auto-upload)"),
 ):
     """Submit a render job. Auto-uploads the .blend file if needed."""
+    token = upload_token.strip()
+
     if auto_upload and blend_file.exists():
         console.print(f"Uploading [bold]{blend_file.name}[/bold]...")
         with blend_file.open("rb") as f:
-            api_post("/upload", files={"file": (blend_file.name, f, "application/octet-stream")})
+            upload_result = api_post("/upload", files={"file": (blend_file.name, f, "application/octet-stream")})
+        token = upload_result["upload_token"]
         console.print("[dim]Upload complete[/dim]")
     elif not blend_file.exists():
-        rprint(f"[yellow]Warning: {blend_file} not found locally — assuming it's already on the server[/yellow]")
+        if not token:
+            rprint(f"[red]{blend_file} not found locally. Provide --token from a previous upload.[/red]")
+            raise typer.Exit(1)
+    elif not token:
+        rprint("[red]Missing upload token. Use --token or enable --auto-upload.[/red]")
+        raise typer.Exit(1)
 
     payload = {
         "file_name"         : blend_file.name,
+        "upload_token"      : token,
         "frame_start"       : start,
         "frame_end"         : end,
         "chunk_size"        : chunk,
@@ -136,6 +148,34 @@ def submit(
     rprint(f"  Frames   : {start}–{end} ({end - start + 1} total)")
     rprint(f"  Assemble : {'yes' if not no_stitch else 'no'}")
     rprint(f"\n[dim]Track progress:[/dim]  python tether_cli.py watch {job['job_id']}")
+
+
+@app.command()
+def uploads():
+    """List currently active uploaded blend assets and token expiry."""
+    items = api_get("/uploads")
+    if not items:
+        rprint("[yellow]No active uploads found.[/yellow]")
+        return
+
+    table = Table(show_header=True, header_style="bold dim", title="Active Uploads")
+    table.add_column("File", width=24)
+    table.add_column("Size", width=10)
+    table.add_column("SHA256", width=16)
+    table.add_column("Token", width=18)
+    table.add_column("Expires", width=28)
+
+    for item in items:
+        size_kb = item.get("size_bytes", 0) / 1024
+        table.add_row(
+            item.get("file_name", ""),
+            f"{size_kb:.1f} KB",
+            item.get("sha256", "")[:12] + "...",
+            item.get("upload_token", "")[:12] + "...",
+            item.get("expires_at", ""),
+        )
+
+    console.print(table)
 
 
 @app.command()

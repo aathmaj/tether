@@ -51,6 +51,7 @@ LOG_LEVEL            = os.getenv("LOG_LEVEL", "INFO").upper()
 FFMPEG_PATH          = os.getenv("FFMPEG_PATH", "ffmpeg")
 ENABLE_STITCHER      = os.getenv("ENABLE_STITCHER", "true").lower() == "true"
 STITCHER_FPS         = int(os.getenv("STITCHER_FPS", "24"))
+UPLOAD_TOKEN_TTL_SECONDS = int(os.getenv("UPLOAD_TOKEN_TTL_SECONDS", "86400"))
 
 # S3 / R2 config (all optional — falls back to local storage if unset)
 S3_ENDPOINT_URL      = os.getenv("S3_ENDPOINT_URL")       # e.g. https://<account>.r2.cloudflarestorage.com
@@ -164,6 +165,7 @@ class VerificationStatus(str, Enum):
 
 class CreateJobRequest(BaseModel):
     file_name:          str = Field(description="Blend file under ./jobs/ or an S3 object key")
+    upload_token:       str = Field(min_length=8, description="Token returned by POST /upload")
     frame_start:        int = Field(ge=1)
     frame_end:          int = Field(ge=1)
     chunk_size:         int = Field(default=5, ge=1)
@@ -219,6 +221,15 @@ class JobRecord(BaseModel):
     created_at:         str
     updated_at:         str
     tasks:              List[JobTask]
+
+
+class UploadRecord(BaseModel):
+    file_name:   str
+    sha256:      str
+    size_bytes:  int
+    upload_token: str
+    uploaded_at: str
+    expires_at:  str
 
 
 class WorkerRegisterRequest(BaseModel):
@@ -282,6 +293,7 @@ class OrchestratorState:
     def __init__(self) -> None:
         self.jobs: Dict[str, JobRecord] = {}
         self.workers: Dict[str, WorkerRecord] = {}
+        self.uploads: Dict[str, UploadRecord] = {}
         self.db_path = (
             str((BASE_DIR / STATE_DB_PATH).resolve())
             if not os.path.isabs(STATE_DB_PATH)
@@ -307,6 +319,13 @@ class OrchestratorState:
                 updated_at TEXT NOT NULL
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS uploads (
+                file_name TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         self.conn.commit()
 
     def _load_state(self) -> None:
@@ -316,7 +335,15 @@ class OrchestratorState:
         for (payload,) in self.conn.execute("SELECT payload FROM workers"):
             worker = WorkerRecord.model_validate(json.loads(payload))
             self.workers[worker.worker_id] = worker
-        logger.info("Loaded %d jobs, %d workers", len(self.jobs), len(self.workers))
+        for (payload,) in self.conn.execute("SELECT payload FROM uploads"):
+            upload = UploadRecord.model_validate(json.loads(payload))
+            self.uploads[upload.file_name] = upload
+        logger.info(
+            "Loaded %d jobs, %d workers, %d uploads",
+            len(self.jobs),
+            len(self.workers),
+            len(self.uploads),
+        )
 
     def save_job(self, job: JobRecord) -> None:
         self.conn.execute(
@@ -337,6 +364,31 @@ class OrchestratorState:
             (worker.worker_id, worker.model_dump_json(), worker.last_seen_at),
         )
         self.conn.commit()
+
+    def save_upload(self, upload: UploadRecord) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO uploads (file_name, payload, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(file_name) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at
+            """,
+            (upload.file_name, upload.model_dump_json(), upload.uploaded_at),
+        )
+        self.conn.commit()
+
+    def delete_upload(self, file_name: str) -> None:
+        self.conn.execute("DELETE FROM uploads WHERE file_name = ?", (file_name,))
+        self.conn.commit()
+        self.uploads.pop(file_name, None)
+
+    def cleanup_expired_uploads(self) -> None:
+        now = utc_now()
+        expired: List[str] = []
+        for file_name, upload in self.uploads.items():
+            expires_at = datetime.fromisoformat(upload.expires_at)
+            if now > expires_at:
+                expired.append(file_name)
+        for file_name in expired:
+            self.delete_upload(file_name)
 
     def cleanup_stale_workers(self) -> None:
         now = utc_now()
@@ -588,13 +640,42 @@ async def upload_blend_file(file: UploadFile = File(...)) -> Dict:
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     sha = read_sha256(dest)
+    now = utc_now()
+    expires_at = now + timedelta(seconds=UPLOAD_TOKEN_TTL_SECONDS)
+    upload = UploadRecord(
+        file_name=safe_name,
+        sha256=sha,
+        size_bytes=dest.stat().st_size,
+        upload_token=str(uuid.uuid4()),
+        uploaded_at=to_iso(now),
+        expires_at=to_iso(expires_at),
+    )
+
+    with DB_LOCK:
+        state.uploads[safe_name] = upload
+        state.save_upload(upload)
+
     logger.info("Uploaded blend file: %s (%s)", safe_name, sha[:8])
 
     if USE_S3:
         s3 = get_s3_client()
         s3.upload_file(str(dest), S3_BUCKET_NAME, f"jobs/{safe_name}")
 
-    return {"file_name": safe_name, "sha256": sha, "size_bytes": dest.stat().st_size}
+    return {
+        "file_name": safe_name,
+        "sha256": sha,
+        "size_bytes": dest.stat().st_size,
+        "upload_token": upload.upload_token,
+        "expires_at": upload.expires_at,
+    }
+
+
+@app.get("/uploads", response_model=List[UploadRecord], dependencies=[Depends(verify_api_key)])
+def list_uploads() -> List[UploadRecord]:
+    with DB_LOCK:
+        state.cleanup_expired_uploads()
+        uploads = list(state.uploads.values())
+    return sorted(uploads, key=lambda item: item.uploaded_at, reverse=True)
 
 
 # Health 
@@ -619,6 +700,29 @@ def create_job(payload: CreateJobRequest) -> JobRecord:
     if not source_file.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {payload.file_name}. Upload it first via POST /upload")
 
+    with DB_LOCK:
+        state.cleanup_expired_uploads()
+        upload = state.uploads.get(payload.file_name)
+    if not upload:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"File '{payload.file_name}' is not an active uploaded asset. "
+                "Upload it via POST /upload and pass the returned upload_token."
+            ),
+        )
+    if upload.upload_token != payload.upload_token:
+        raise HTTPException(status_code=401, detail="Invalid upload_token for this file")
+
+    current_sha = read_sha256(source_file)
+    if current_sha != upload.sha256:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "File contents changed after upload. Re-upload the .blend and submit with the new upload_token."
+            ),
+        )
+
     tasks: List[JobTask] = []
     cursor = payload.frame_start
     while cursor <= payload.frame_end:
@@ -642,7 +746,7 @@ def create_job(payload: CreateJobRequest) -> JobRecord:
     record = JobRecord(
         job_id             = str(uuid.uuid4()),
         file_name          = payload.file_name,
-        file_sha256        = read_sha256(source_file),
+        file_sha256        = current_sha,
         frame_start        = payload.frame_start,
         frame_end          = payload.frame_end,
         chunk_size         = payload.chunk_size,
@@ -883,6 +987,9 @@ def artifact_notify(job_id: str, task_id: str, body: Dict) -> Dict:
         raise HTTPException(status_code=400, detail="S3 not configured")
     checksum   = body.get("checksum_sha256", "")
     object_key = body.get("object_key", "")
+    replica_id = body.get("replica_id", "")
+    if not object_key:
+        raise HTTPException(status_code=400, detail="Missing object_key")
     local_path = RESULTS_DIR / os.path.basename(object_key)
 
     s3 = get_s3_client()
@@ -899,7 +1006,11 @@ def artifact_notify(job_id: str, task_id: str, body: Dict) -> Dict:
         task = next((t for t in job.tasks if t.task_id == task_id), None) if job else None
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        replica = next((r for r in task.replicas if r.status == TaskStatus.running), None)
+        replica = None
+        if replica_id:
+            replica = next((r for r in task.replicas if r.replica_id == replica_id), None)
+        if not replica:
+            replica = next((r for r in task.replicas if r.status == TaskStatus.running), None)
         if replica:
             replica.status          = TaskStatus.complete
             replica.artifact_path   = str(local_path)

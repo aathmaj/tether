@@ -386,6 +386,7 @@ def upload_artifact(
     session: requests.Session,
     job_id: str,
     task_id: str,
+    replica_id: str,
     artifact_path: Path,
 ) -> None:
     checksum = file_sha256(artifact_path)
@@ -396,7 +397,9 @@ def upload_artifact(
         timeout=15,
     )
     if info_resp.status_code == 200:
-        presigned = info_resp.json().get("presigned_url")
+        presigned_info = info_resp.json()
+        presigned = presigned_info.get("presigned_url")
+        object_key = presigned_info.get("object_key", "")
         if presigned:
             print("[agent] Using presigned upload URL (direct to cloud storage)")
             with artifact_path.open("rb") as f:
@@ -405,7 +408,11 @@ def upload_artifact(
             # Notify orchestrator that upload is done
             session.post(
                 f"{ORCHESTRATOR_URL}/jobs/{job_id}/tasks/{task_id}/artifact_notify",
-                json={"checksum_sha256": checksum, "object_key": artifact_path.name},
+                json={
+                    "checksum_sha256": checksum,
+                    "object_key": object_key,
+                    "replica_id": replica_id,
+                },
                 timeout=30,
             )
             return
@@ -414,7 +421,7 @@ def upload_artifact(
     with artifact_path.open("rb") as f:
         response = session.post(
             f"{ORCHESTRATOR_URL}/jobs/{job_id}/tasks/{task_id}/artifact",
-            data={"checksum_sha256": checksum},
+            data={"checksum_sha256": checksum, "replica_id": replica_id},
             files={"file": (artifact_path.name, f, "application/zip")},
             timeout=300,
         )
@@ -445,6 +452,8 @@ def report_task_failure(
 
 # Agent Loop
 def run_agent() -> None:
+    global _active_container
+
     session = build_session()
     register_worker(session)
     start_headroom_monitor()
@@ -485,6 +494,7 @@ def run_agent() -> None:
             frame_end   = int(assignment["frame_end"])
             file_name   = assignment["file_name"]
             file_sha    = assignment["file_sha256"]
+            replica_id  = assignment.get("replica_id", "")
             prefix      = f"{job_id}_{task_id}_"
 
             print(f"[agent] Claimed task {task_id} | frames {frame_start}–{frame_end}")
@@ -492,7 +502,7 @@ def run_agent() -> None:
             job_file    = ensure_job_file(session, file_name, file_sha)
             frame_files = run_blender_render(job_file, frame_start, frame_end, prefix)
             artifact    = package_frames(job_id, task_id, frame_files)
-            upload_artifact(session, job_id, task_id, artifact)
+            upload_artifact(session, job_id, task_id, replica_id, artifact)
 
             print(f"[agent] ✓ Task {task_id} complete")
             active_job  = None
@@ -520,7 +530,6 @@ def run_agent() -> None:
                 except Exception:
                     pass
                 with _lock:
-                    global _active_container
                     _active_container = None
 
             time.sleep(min(POLL_INTERVAL_SECONDS * 2, 30))

@@ -78,8 +78,14 @@ class TetherJobProperties(bpy.types.PropertyGroup):
         description = "Auto-assemble rendered frames into .mp4 when complete",
         default     = True,
     )
+    auto_open_result: bpy.props.BoolProperty(
+        name        = "Auto Open Result",
+        description = "Open the final video URL in your browser when a job completes",
+        default     = False,
+    )
     # Status tracking
     job_id: bpy.props.StringProperty(default="")
+    upload_token: bpy.props.StringProperty(default="")
     job_status: bpy.props.StringProperty(default="")
     job_progress: bpy.props.FloatProperty(default=0.0, min=0.0, max=1.0, subtype="FACTOR")
     status_message: bpy.props.StringProperty(default="")
@@ -197,12 +203,15 @@ class TETHER_OT_SubmitJob(bpy.types.Operator):
                 r.raise_for_status()
                 upload_result = r.json()
                 file_name     = upload_result["file_name"]
+                upload_token  = upload_result["upload_token"]
+                expires_at    = upload_result.get("expires_at", "")
 
                 props.status_message = "Creating job..."
 
                 # 3. Create the job
                 payload = {
                     "file_name"         : file_name,
+                    "upload_token"      : upload_token,
                     "frame_start"       : scene.frame_start,
                     "frame_end"         : scene.frame_end,
                     "chunk_size"        : props.chunk_size,
@@ -223,9 +232,13 @@ class TETHER_OT_SubmitJob(bpy.types.Operator):
                 # 4. Store job ID and start polling
                 def update_ui():
                     props.job_id       = job["job_id"]
+                    props.upload_token = upload_token
                     props.job_status   = job["status"]
                     props.job_progress = 0.0
-                    props.status_message = f"Job {job['job_id'][:8]} created — {len(job['tasks'])} tasks"
+                    props.status_message = (
+                        f"Job {job['job_id'][:8]} created — {len(job['tasks'])} tasks"
+                        + (f" (token expires: {expires_at})" if expires_at else "")
+                    )
                     props.is_polling   = True
                     return None  # don't repeat
 
@@ -264,6 +277,9 @@ class TETHER_OT_SubmitJob(bpy.types.Operator):
                         f"{job['status'].upper()} — {done}/{total} chunks"
                         + (" — Assembling video..." if job["status"] == "stitching" else "")
                     )
+                    if job["status"] == "complete" and props.auto_open_result:
+                        import webbrowser
+                        webbrowser.open(f"{get_orchestrator_url()}/jobs/{job_id}/download")
                     if job["status"] in ("complete", "failed"):
                         props.is_polling = False
                     return None
@@ -312,6 +328,38 @@ class TETHER_OT_OpenDashboard(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class TETHER_OT_CopyJobID(bpy.types.Operator):
+    bl_idname  = "tether.copy_job_id"
+    bl_label   = "Copy Job ID"
+    bl_description = "Copy the current Tether job ID to clipboard"
+
+    def execute(self, context):
+        props = context.scene.tether_job
+        if not props.job_id:
+            self.report({"WARNING"}, "No active job ID")
+            return {"CANCELLED"}
+        context.window_manager.clipboard = props.job_id
+        self.report({"INFO"}, "Job ID copied")
+        return {"FINISHED"}
+
+
+class TETHER_OT_OpenJobDownload(bpy.types.Operator):
+    bl_idname  = "tether.open_job_download"
+    bl_label   = "Open Download URL"
+    bl_description = "Open the current job download endpoint in your browser"
+
+    def execute(self, context):
+        import webbrowser
+
+        props = context.scene.tether_job
+        if not props.job_id:
+            self.report({"WARNING"}, "No active job ID")
+            return {"CANCELLED"}
+
+        webbrowser.open(f"{get_orchestrator_url()}/jobs/{props.job_id}/download")
+        return {"FINISHED"}
+
+
 # Panel
 class TETHER_PT_RenderPanel(bpy.types.Panel):
     bl_label       = "Tether Render Farm"
@@ -357,6 +405,7 @@ class TETHER_PT_RenderPanel(bpy.types.Panel):
         row = box.row()
         row.prop(props, "pack_textures")
         row.prop(props, "stitch_output")
+        box.prop(props, "auto_open_result")
 
         layout.separator()
 
@@ -379,6 +428,9 @@ class TETHER_PT_RenderPanel(bpy.types.Panel):
                 box.label(text=f"Job ID: {props.job_id[:16]}...")
                 row = box.row()
                 row.prop(props, "job_progress", text="Progress", slider=True)
+                row = box.row(align=True)
+                row.operator("tether.copy_job_id", icon="COPYDOWN")
+                row.operator("tether.open_job_download", icon="URL")
                 if props.is_polling:
                     box.operator("tether.cancel_polling", icon="X")
 
@@ -394,6 +446,8 @@ classes = (
     TETHER_OT_SubmitJob,
     TETHER_OT_CancelPolling,
     TETHER_OT_OpenDashboard,
+    TETHER_OT_CopyJobID,
+    TETHER_OT_OpenJobDownload,
     TETHER_PT_RenderPanel,
 )
 

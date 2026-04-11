@@ -2,7 +2,7 @@
 .env
 *.pyc
 
-# Local Data (Don't upload your friend's renders)
+# Local Data 
 node_data/
 jobs/
 results/

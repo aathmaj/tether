@@ -23,6 +23,7 @@ Additional user-facing surfaces:
 - Artifact integrity checks (SHA256).
 - Input file checksum validation on workers.
 - Optional API key auth for control/worker endpoints.
+- Strict upload-to-submit flow: jobs require a valid `/upload` token (manual file drops in `jobs/` are rejected).
 - Persistent state in SQLite with WAL mode.
 - Optional replicated rendering (`replication_factor` 1-3) with verification:
   - Per-frame hash comparison across replicas.
@@ -32,6 +33,20 @@ Additional user-facing surfaces:
 - Optional ngrok public tunnel for internet-reachable orchestrator.
 - Headroom-aware worker claiming and container pause/unpause behavior.
 - DRY_RUN mode for local/dev tests without Blender/Docker.
+- Upload inventory endpoint: `GET /uploads` shows active upload tokens and expiry.
+- Blender add-on quality-of-life controls: copy current job ID, open download URL, optional auto-open result.
+
+## Latest Update
+
+Last version:
+- Supported upload and job submission, but files manually dropped into `jobs/` could still be submitted.
+- Basic CLI/add-on submit flow without upload-token enforcement.
+
+This version improves:
+- Strict upload-only submission by requiring a valid `upload_token` from `/upload` when creating jobs.
+- Token expiry and persisted upload records, plus `GET /uploads` visibility.
+- CLI updates (`--token` support and `uploads` command) and Blender add-on quality-of-life controls.
+- Railway deployment readiness with `Procfile`, `railway.json`, and cloud rollout instructions.
 
 ## Repository Layout
 
@@ -162,6 +177,7 @@ cp .env.local-dev.example .env
 - `FFMPEG_PATH` (default `ffmpeg`)
 - `ENABLE_STITCHER` (`true`/`false`)
 - `STITCHER_FPS`
+- `UPLOAD_TOKEN_TTL_SECONDS` (default `86400`)
 
 Optional S3/R2:
 
@@ -279,6 +295,8 @@ python tether_cli.py watch <job_id>
 python tether_cli.py download <job_id>
 ```
 
+Note: `submit` auto-uploads by default and uses the returned upload token automatically. If you disable auto-upload, pass `--token <upload_token>` from a prior `upload` call.
+
 Blender path:
 
 - Install and enable `blender_addon.py`.
@@ -348,12 +366,20 @@ python tether_cli.py watch <job_id>
 python tether_cli.py download <job_id>
 ```
 
+No-auto-upload flow:
+
+```bash
+python tether_cli.py upload scene.blend
+python tether_cli.py submit scene.blend --start 1 --end 120 --no-auto-upload --token <upload_token>
+```
+
 Useful CLI commands:
 
 - `python tether_cli.py jobs`
 - `python tether_cli.py status <job_id>`
 - `python tether_cli.py workers`
 - `python tether_cli.py metrics`
+- `python tether_cli.py uploads`
 
 ### Option B: Blender Add-on (Detailed)
 
@@ -375,14 +401,77 @@ Useful CLI commands:
 8. Click Submit to Tether.
 9. Watch live status/progress in Blender (queued/running/stitching/complete/failed).
 10. Use Stop Watching to stop polling if needed.
+11. Optional: use Copy Job ID / Open Download URL controls in the status box.
 
 How the add-on submits:
 
 - Saves current scene state.
 - Optionally packs external textures into a temporary blend copy.
-- Uploads the packed blend via `/upload`.
-- Creates the job via `/jobs` using scene frame range and panel settings.
+- Uploads the packed blend via `/upload` and captures the upload token.
+- Creates the job via `/jobs` using scene frame range, panel settings, and that upload token.
 - Polls `/jobs/{job_id}` to update UI progress.
+
+## Upload Flow Rules
+
+- Only assets uploaded via `POST /upload` can be submitted.
+- `POST /jobs` requires both `file_name` and a matching `upload_token`.
+- Upload tokens expire after `UPLOAD_TOKEN_TTL_SECONDS` (default 24 hours).
+- If the uploaded file changes on disk, submission is rejected until re-uploaded.
+- Manually dropping `.blend` files into `jobs/` is not a valid submission path.
+
+## Railway Deployment (Cloud Orchestrator)
+
+### 1. Push code to GitHub
+
+```bash
+git init
+git add .
+git commit -m "Tether orchestrator with tokenized upload flow"
+git branch -M main
+git remote add origin https://github.com/<your-user>/<your-repo>.git
+git push -u origin main
+```
+
+### 2. Create Railway project
+
+1. Sign in to Railway and create a New Project.
+2. Choose Deploy from GitHub Repo and select your repository.
+3. Railway will detect Python and use `railway.json` / `Procfile` to start `uvicorn orchestrator:app`.
+4. Set service Variables in Railway:
+  - `ORCHESTRATOR_API_KEY` (required)
+  - `UPLOAD_TOKEN_TTL_SECONDS` (optional)
+  - Any other production values from `.env.public-production.example`
+5. Wait for deploy and open the generated service domain, for example:
+  - `https://tether-orchestrator.railway.app`
+
+### 3. Point all node agents to cloud URL
+
+On every worker machine, update `.env`:
+
+```env
+ORCHESTRATOR_URL=https://tether-orchestrator.railway.app
+ORCHESTRATOR_API_KEY=<same value set on Railway>
+```
+
+Then restart workers:
+
+```bash
+python node_agent.py
+```
+
+### 4. Point CLI and Blender add-on to cloud URL
+
+- CLI: set `ORCHESTRATOR_URL` in local `.env` to the Railway URL.
+- Blender add-on: set Add-on Preferences -> Orchestrator URL to the same Railway URL.
+
+### 5. Verify production flow
+
+```bash
+python tether_cli.py upload scene.blend
+python tether_cli.py submit scene.blend --start 1 --end 20
+python tether_cli.py watch <job_id>
+python tether_cli.py workers
+```
 
 If Blender reports missing `requests`, install it in Blender's Python environment:
 
@@ -417,6 +506,7 @@ Open `dashboard.html` in a browser.
 
 - `GET /health`
 - `POST /upload`
+- `GET /uploads`
 - `POST /jobs`
 - `GET /jobs`
 - `GET /jobs/{job_id}`
