@@ -1,20 +1,3 @@
-from backend import orchestrator as _impl
-
-# Compatibility export for "uvicorn orchestrator:app"
-app = _impl.app
-
-
-if __name__ == "__main__":
-    if _impl.ENABLE_NGROK:
-        if _impl.ngrok is None:
-            raise RuntimeError("ENABLE_NGROK=true but ngrok is not installed")
-        if not _impl.NGROK_AUTH_TOKEN:
-            raise RuntimeError("ENABLE_NGROK=true but NGROK_AUTH_TOKEN is not set")
-        _impl.ngrok.set_auth_token(_impl.NGROK_AUTH_TOKEN)
-        listener = _impl.ngrok.forward(_impl.PORT)
-        print(f"\nPublic URL: {listener.url()}\n")
-
-    _impl.uvicorn.run(app, host="0.0.0.0", port=_impl.PORT)
 
 import hashlib
 import json

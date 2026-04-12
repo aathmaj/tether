@@ -1,11 +1,3 @@
-from workers import node_agent as _impl
-
-
-if __name__ == "__main__":
-    _impl.signal.signal(_impl.signal.SIGINT, _impl.request_stop)
-    _impl.signal.signal(_impl.signal.SIGTERM, _impl.request_stop)
-    if _impl.setup_node():
-        _impl.run_agent()
 import hashlib
 import os
 import signal

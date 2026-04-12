@@ -50,15 +50,17 @@ This version improves:
 
 ## Repository Layout
 
-- `orchestrator.py`: FastAPI scheduler/control plane + stitcher + persistence.
-- `node_agent.py`: worker runtime and Blender execution flow.
-- `tether_cli.py`: operator/consumer command line client.
-- `blender_addon.py`: Blender plugin for submit + status polling.
-- `dashboard.html`: browser dashboard for fleet and queue monitoring.
+- `backend/orchestrator.py`: FastAPI scheduler/control plane + stitcher + persistence.
+- `workers/node_agent.py`: worker runtime and Blender execution flow.
+- `clients/cli/tether_cli.py`: operator/consumer command line client.
+- `clients/blender/blender_addon.py`: Blender plugin for submit + status polling.
+- `clients/blender/dashboard.html`: browser dashboard for fleet and queue monitoring.
 - `jobs/`: uploaded `.blend` inputs.
 - `results/`: uploaded task artifacts (`.zip`).
 - `finals/`: stitched final videos (`.mp4`, created at runtime).
 - `staging/`: temporary stitcher workspace (created at runtime).
+
+Compatibility shims remain at repo root (`orchestrator.py`, `node_agent.py`, `tether_cli.py`) so existing commands and Railway config continue to work.
 
 ## Dependency Matrix
 
@@ -242,7 +244,7 @@ curl http://127.0.0.1:8000/metrics
 
 4. Optional dashboard:
 
-- Open `dashboard.html` and set URL to `http://127.0.0.1:8000`.
+- Open `clients/blender/dashboard.html` and set URL to `http://127.0.0.1:8000`.
 
 ### 2) Supplier Role (worker/node provider)
 
@@ -299,7 +301,7 @@ Note: `submit` auto-uploads by default and uses the returned upload token automa
 
 Blender path:
 
-- Install and enable `blender_addon.py`.
+- Install and enable `clients/blender/blender_addon.py`.
 - Set add-on `Orchestrator URL` and `API Key`.
 - Submit from Render Properties -> Tether Render Farm panel.
 
@@ -385,7 +387,7 @@ Useful CLI commands:
 
 1. Open Blender.
 2. Go to Edit -> Preferences -> Add-ons.
-3. Click Install, choose `blender_addon.py`, and enable "Tether Render Farm".
+3. Click Install, choose `clients/blender/blender_addon.py`, and enable "Tether Render Farm".
 4. In add-on preferences, set:
   - `Orchestrator URL` (local URL, LAN URL, or public ngrok/domain URL)
   - `API Key` (must match `ORCHESTRATOR_API_KEY` if auth is enabled)
@@ -496,7 +498,7 @@ Linux/macOS example:
 
 ## Dashboard
 
-Open `dashboard.html` in a browser.
+Open `clients/blender/dashboard.html` in a browser.
 
 - Set orchestrator URL and API key in the settings modal.
 - View metrics, worker status, and job progress.

@@ -1,8 +1,3 @@
-from clients.cli.tether_cli import app
-
-
-if __name__ == "__main__":
-    app()
 import os
 import sys
 import time
