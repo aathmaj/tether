@@ -60,8 +60,6 @@ This version improves:
 - `finals/`: stitched final videos (`.mp4`, created at runtime).
 - `staging/`: temporary stitcher workspace (created at runtime).
 
-Compatibility shims remain at repo root (`orchestrator.py`, `node_agent.py`, `tether_cli.py`) so existing commands and Railway config continue to work.
-
 ## Dependency Matrix
 
 ### System prerequisites
@@ -232,7 +230,7 @@ cp .env.local-dev.example .env
 2. Start orchestrator:
 
 ```bash
-python orchestrator.py
+python backend/orchestrator.py
 ```
 
 3. Validate endpoints:
@@ -266,7 +264,7 @@ docker pull linuxserver/blender:latest
 3. Start worker:
 
 ```bash
-python node_agent.py
+python workers/node_agent.py
 ```
 
 4. Optional dry-run mode (no Docker/Blender render):
@@ -275,13 +273,13 @@ Windows PowerShell:
 
 ```powershell
 $env:DRY_RUN = "true"
-python node_agent.py
+python workers/node_agent.py
 ```
 
 Linux/macOS:
 
 ```bash
-DRY_RUN=true python node_agent.py
+DRY_RUN=true python workers/node_agent.py
 ```
 
 ### 3) Buyer Role (job submitter / consumer)
@@ -291,10 +289,10 @@ Use this to submit and monitor render jobs.
 CLI path:
 
 ```bash
-python tether_cli.py upload scene.blend
-python tether_cli.py submit scene.blend --start 1 --end 120 --chunk 10 --replicas 1
-python tether_cli.py watch <job_id>
-python tether_cli.py download <job_id>
+python clients/cli/tether_cli.py upload scene.blend
+python clients/cli/tether_cli.py submit scene.blend --start 1 --end 120 --chunk 10 --replicas 1
+python clients/cli/tether_cli.py watch <job_id>
+python clients/cli/tether_cli.py download <job_id>
 ```
 
 Note: `submit` auto-uploads by default and uses the returned upload token automatically. If you disable auto-upload, pass `--token <upload_token>` from a prior `upload` call.
@@ -335,7 +333,7 @@ Then update these required values before launch:
 ## 1. Start orchestrator
 
 ```bash
-python orchestrator.py
+python backend/orchestrator.py
 ```
 
 Health check:
@@ -346,13 +344,13 @@ Health check:
 ## 2. Start one or more workers
 
 ```bash
-python node_agent.py
+python workers/node_agent.py
 ```
 
 For local dry test without Docker/Blender:
 
 ```bash
-DRY_RUN=true python node_agent.py
+DRY_RUN=true python workers/node_agent.py
 ```
 
 ## 3. Submit jobs (three options)
@@ -362,26 +360,26 @@ DRY_RUN=true python node_agent.py
 Upload + submit + monitor:
 
 ```bash
-python tether_cli.py upload scene.blend
-python tether_cli.py submit scene.blend --start 1 --end 120 --chunk 10 --replicas 2
-python tether_cli.py watch <job_id>
-python tether_cli.py download <job_id>
+python clients/cli/tether_cli.py upload scene.blend
+python clients/cli/tether_cli.py submit scene.blend --start 1 --end 120 --chunk 10 --replicas 2
+python clients/cli/tether_cli.py watch <job_id>
+python clients/cli/tether_cli.py download <job_id>
 ```
 
 No-auto-upload flow:
 
 ```bash
-python tether_cli.py upload scene.blend
-python tether_cli.py submit scene.blend --start 1 --end 120 --no-auto-upload --token <upload_token>
+python clients/cli/tether_cli.py upload scene.blend
+python clients/cli/tether_cli.py submit scene.blend --start 1 --end 120 --no-auto-upload --token <upload_token>
 ```
 
 Useful CLI commands:
 
-- `python tether_cli.py jobs`
-- `python tether_cli.py status <job_id>`
-- `python tether_cli.py workers`
-- `python tether_cli.py metrics`
-- `python tether_cli.py uploads`
+- `python clients/cli/tether_cli.py jobs`
+- `python clients/cli/tether_cli.py status <job_id>`
+- `python clients/cli/tether_cli.py workers`
+- `python clients/cli/tether_cli.py metrics`
+- `python clients/cli/tether_cli.py uploads`
 
 ### Option B: Blender Add-on (Detailed)
 
@@ -438,7 +436,7 @@ git push -u origin main
 
 1. Sign in to Railway and create a New Project.
 2. Choose Deploy from GitHub Repo and select your repository.
-3. Railway will detect Python and use `railway.json` / `Procfile` to start `uvicorn orchestrator:app`.
+3. Railway will detect Python and use `railway.json` / `Procfile` to start `uvicorn backend.orchestrator:app`.
 4. Set service Variables in Railway:
   - `ORCHESTRATOR_API_KEY` (required)
   - `UPLOAD_TOKEN_TTL_SECONDS` (optional)
@@ -458,7 +456,7 @@ ORCHESTRATOR_API_KEY=<same value set on Railway>
 Then restart workers:
 
 ```bash
-python node_agent.py
+python workers/node_agent.py
 ```
 
 ### 4. Point CLI and Blender add-on to cloud URL
@@ -469,10 +467,10 @@ python node_agent.py
 ### 5. Verify production flow
 
 ```bash
-python tether_cli.py upload scene.blend
-python tether_cli.py submit scene.blend --start 1 --end 20
-python tether_cli.py watch <job_id>
-python tether_cli.py workers
+python clients/cli/tether_cli.py upload scene.blend
+python clients/cli/tether_cli.py submit scene.blend --start 1 --end 20
+python clients/cli/tether_cli.py watch <job_id>
+python clients/cli/tether_cli.py workers
 ```
 
 If Blender reports missing `requests`, install it in Blender's Python environment:
