@@ -1,6 +1,8 @@
 # Tether: Decentralized P2P Compute Fabric
 
-Tether is a decentralized compute coordination layer for Blender rendering jobs. It captures spare CPU/GPU headroom on participating machines and coordinates chunked rendering across a fleet.
+Tether is a decentralized compute coordination layer for asynchronous tasks, namely blender rendering. It captures spare CPU/GPU headroom on participating machines and coordinates chunked rendering across a fleet.
+
+It is part phase 1 of 4, to a complete DePIN stack.
 
 It has two core runtime components:
 
