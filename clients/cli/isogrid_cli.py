@@ -15,7 +15,7 @@ from rich import print as rprint
 
 load_dotenv()
 
-app     = typer.Typer(help="Tether Distributed Render CLI", add_completion=False)
+app     = typer.Typer(help="Isogrid Distributed Render CLI", add_completion=False)
 console = Console()
 
 ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -147,7 +147,7 @@ def submit(
     rprint(f"  Tasks    : {task_count} chunks × {replicas} replica(s)")
     rprint(f"  Frames   : {start}–{end} ({end - start + 1} total)")
     rprint(f"  Assemble : {'yes' if not no_stitch else 'no'}")
-    rprint(f"\n[dim]Track progress:[/dim]  python clients/cli/tether_cli.py watch {job['job_id']}")
+    rprint(f"\n[dim]Track progress:[/dim]  python clients/cli/isogrid_cli.py watch {job['job_id']}")
 
 
 @app.command()
@@ -320,7 +320,7 @@ def watch(
         rprint(f"\n[green]✓ Job complete![/green]")
         if job.get("final_video_path"):
             rprint(f"  Video: {job['final_video_path']}")
-        rprint(f"  Download: python clients/cli/tether_cli.py download {job_id}")
+        rprint(f"  Download: python clients/cli/isogrid_cli.py download {job_id}")
     elif job["status"] == "stitching":
         rprint(f"\n[cyan]Assembling video...[/cyan]  Check again in a moment.")
     else:

@@ -65,7 +65,7 @@ logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger("tether.orchestrator")
+logger = logging.getLogger("isogrid.orchestrator")
 
 BASE_DIR     = Path(__file__).resolve().parent
 JOBS_DIR     = BASE_DIR / "jobs"
@@ -77,7 +77,7 @@ DB_LOCK      = threading.Lock()
 for d in (JOBS_DIR, RESULTS_DIR, STAGING_DIR, FINALS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Tether Orchestrator", version="3.0.0")
+app = FastAPI(title="Isogrid Orchestrator", version="3.0.0")
 
 # Allow the dashboard (running on any localhost port) to call the API
 app.add_middleware(
