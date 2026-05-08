@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 bl_info = {
-    "name"       : "Tether Render Farm",
-    "author"     : "Tether",
+    "name"       : "Isogrid Render Farm",
+    "author"     : "Isogrid",
     "version"    : (1, 0, 0),
     "blender"    : (3, 0, 0),
-    "location"   : "Properties > Render > Tether Render Farm",
-    "description": "Submit render jobs to the Tether distributed compute network",
+    "location"   : "Properties > Render > Isogrid Render Farm",
+    "description": "Submit render jobs to the Isogrid distributed compute network",
     "category"   : "Render",
 }
 
@@ -24,13 +24,13 @@ except ImportError:
 
 
 # Prefs
-class TetherPreferences(bpy.types.AddonPreferences):
+class IsogridPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
     orchestrator_url: bpy.props.StringProperty(
         name    = "Orchestrator URL",
         default = "http://127.0.0.1:8000",
-        description = "Base URL of the Tether orchestrator (local or ngrok URL)",
+        description = "Base URL of the Isogrid orchestrator (local or ngrok URL)",
     )
     api_key: bpy.props.StringProperty(
         name    = "API Key",
@@ -46,7 +46,7 @@ class TetherPreferences(bpy.types.AddonPreferences):
 
 
 # Scene Properties
-class TetherJobProperties(bpy.types.PropertyGroup):
+class IsogridJobProperties(bpy.types.PropertyGroup):
     chunk_size: bpy.props.IntProperty(
         name        = "Chunk Size",
         description = "Frames per task chunk",
@@ -93,7 +93,7 @@ class TetherJobProperties(bpy.types.PropertyGroup):
 
 
 # Util Funcs
-def get_prefs() -> 'TetherPreferences':
+def get_prefs() -> 'IsogridPreferences':
     return bpy.context.preferences.addons[__name__].preferences
 
 
@@ -121,10 +121,10 @@ def is_connected() -> bool:
 
 
 # Oeprators
-class TETHER_OT_TestConnection(bpy.types.Operator):
-    bl_idname  = "tether.test_connection"
+class ISOGRID_OT_TestConnection(bpy.types.Operator):
+    bl_idname  = "isogrid.test_connection"
     bl_label   = "Test Connection"
-    bl_description = "Ping the Tether orchestrator"
+    bl_description = "Ping the Isogrid orchestrator"
 
     def execute(self, context):
         if not REQUESTS_AVAILABLE:
@@ -137,9 +137,9 @@ class TETHER_OT_TestConnection(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class TETHER_OT_SubmitJob(bpy.types.Operator):
-    bl_idname      = "tether.submit_job"
-    bl_label       = "Submit to Tether"
+class ISOGRID_OT_SubmitJob(bpy.types.Operator):
+    bl_idname      = "isogrid.submit_job"
+    bl_label       = "Submit to Isogrid"
     bl_description = "Pack textures, upload scene, and create a render job"
 
     def execute(self, context):
@@ -148,7 +148,7 @@ class TETHER_OT_SubmitJob(bpy.types.Operator):
             return {"CANCELLED"}
 
         scene = context.scene
-        props = scene.tether_job
+        props = scene.isogrid_job
 
         if not is_connected():
             self.report({"ERROR"}, f"Cannot reach orchestrator at {get_orchestrator_url()}")
@@ -167,14 +167,14 @@ class TETHER_OT_SubmitJob(bpy.types.Operator):
 
     def _submit_thread(self, context):
         scene = context.scene
-        props = scene.tether_job
+        props = scene.isogrid_job
         prefs = get_prefs()
 
         try:
             # 1. Save a copy of the current .blend with packed textures
             props.status_message = "Packing textures..."
             with tempfile.TemporaryDirectory() as tmpdir:
-                packed_path = Path(tmpdir) / "tether_scene.blend"
+                packed_path = Path(tmpdir) / "isogrid_scene.blend"
 
                 # Save current file state first
                 if bpy.data.filepath:
@@ -196,7 +196,7 @@ class TETHER_OT_SubmitJob(bpy.types.Operator):
                 with packed_path.open("rb") as f:
                     r = requests.post(
                         f"{get_orchestrator_url()}/upload",
-                        files   = {"file": ("tether_scene.blend", f, "application/octet-stream")},
+                        files   = {"file": ("isogrid_scene.blend", f, "application/octet-stream")},
                         headers = build_headers(),
                         timeout = 300,
                     )
@@ -300,21 +300,21 @@ class TETHER_OT_SubmitJob(bpy.types.Operator):
         bpy.app.timers.register(poll, first_interval=5.0)
 
 
-class TETHER_OT_CancelPolling(bpy.types.Operator):
-    bl_idname  = "tether.cancel_polling"
+class ISOGRID_OT_CancelPolling(bpy.types.Operator):
+    bl_idname  = "isogrid.cancel_polling"
     bl_label   = "Stop Watching"
     bl_description = "Stop monitoring job progress"
 
     def execute(self, context):
-        context.scene.tether_job.is_polling = False
-        context.scene.tether_job.status_message = "Monitoring stopped"
+        context.scene.isogrid_job.is_polling = False
+        context.scene.isogrid_job.status_message = "Monitoring stopped"
         return {"FINISHED"}
 
 
-class TETHER_OT_OpenDashboard(bpy.types.Operator):
-    bl_idname  = "tether.open_dashboard"
+class ISOGRID_OT_OpenDashboard(bpy.types.Operator):
+    bl_idname  = "isogrid.open_dashboard"
     bl_label   = "Open Dashboard"
-    bl_description = "Open the Tether web dashboard in a browser"
+    bl_description = "Open the Isogrid web dashboard in a browser"
 
     def execute(self, context):
         import webbrowser
@@ -328,13 +328,13 @@ class TETHER_OT_OpenDashboard(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class TETHER_OT_CopyJobID(bpy.types.Operator):
-    bl_idname  = "tether.copy_job_id"
+class ISOGRID_OT_CopyJobID(bpy.types.Operator):
+    bl_idname  = "isogrid.copy_job_id"
     bl_label   = "Copy Job ID"
-    bl_description = "Copy the current Tether job ID to clipboard"
+    bl_description = "Copy the current Isogrid job ID to clipboard"
 
     def execute(self, context):
-        props = context.scene.tether_job
+        props = context.scene.isogrid_job
         if not props.job_id:
             self.report({"WARNING"}, "No active job ID")
             return {"CANCELLED"}
@@ -343,15 +343,15 @@ class TETHER_OT_CopyJobID(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class TETHER_OT_OpenJobDownload(bpy.types.Operator):
-    bl_idname  = "tether.open_job_download"
+class ISOGRID_OT_OpenJobDownload(bpy.types.Operator):
+    bl_idname  = "isogrid.open_job_download"
     bl_label   = "Open Download URL"
     bl_description = "Open the current job download endpoint in your browser"
 
     def execute(self, context):
         import webbrowser
 
-        props = context.scene.tether_job
+        props = context.scene.isogrid_job
         if not props.job_id:
             self.report({"WARNING"}, "No active job ID")
             return {"CANCELLED"}
@@ -361,9 +361,9 @@ class TETHER_OT_OpenJobDownload(bpy.types.Operator):
 
 
 # Panel
-class TETHER_PT_RenderPanel(bpy.types.Panel):
-    bl_label       = "Tether Render Farm"
-    bl_idname      = "TETHER_PT_render_panel"
+class ISOGRID_PT_RenderPanel(bpy.types.Panel):
+    bl_label       = "Isogrid Render Farm"
+    bl_idname      = "ISOGRID_PT_render_panel"
     bl_space_type  = "PROPERTIES"
     bl_region_type = "WINDOW"
     bl_context     = "render"
@@ -372,7 +372,7 @@ class TETHER_PT_RenderPanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene  = context.scene
-        props  = scene.tether_job
+        props  = scene.isogrid_job
         prefs  = get_prefs()
 
         if not REQUESTS_AVAILABLE:
@@ -385,7 +385,7 @@ class TETHER_PT_RenderPanel(bpy.types.Panel):
         row = box.row()
         row.label(text="Orchestrator:", icon="WORLD")
         row.label(text=prefs.orchestrator_url)
-        box.operator("tether.test_connection", icon="LINKED")
+        box.operator("isogrid.test_connection", icon="LINKED")
 
         layout.separator()
 
@@ -416,7 +416,7 @@ class TETHER_PT_RenderPanel(bpy.types.Panel):
 
         row = layout.row()
         row.scale_y = 1.8
-        row.operator("tether.submit_job", icon="RENDER_ANIMATION")
+        row.operator("isogrid.submit_job", icon="RENDER_ANIMATION")
 
         # Status
         if props.status_message:
@@ -429,39 +429,39 @@ class TETHER_PT_RenderPanel(bpy.types.Panel):
                 row = box.row()
                 row.prop(props, "job_progress", text="Progress", slider=True)
                 row = box.row(align=True)
-                row.operator("tether.copy_job_id", icon="COPYDOWN")
-                row.operator("tether.open_job_download", icon="URL")
+                row.operator("isogrid.copy_job_id", icon="COPYDOWN")
+                row.operator("isogrid.open_job_download", icon="URL")
                 if props.is_polling:
-                    box.operator("tether.cancel_polling", icon="X")
+                    box.operator("isogrid.cancel_polling", icon="X")
 
         layout.separator()
-        layout.operator("tether.open_dashboard", icon="URL")
+        layout.operator("isogrid.open_dashboard", icon="URL")
 
 
 # Registration
 classes = (
-    TetherPreferences,
-    TetherJobProperties,
-    TETHER_OT_TestConnection,
-    TETHER_OT_SubmitJob,
-    TETHER_OT_CancelPolling,
-    TETHER_OT_OpenDashboard,
-    TETHER_OT_CopyJobID,
-    TETHER_OT_OpenJobDownload,
-    TETHER_PT_RenderPanel,
+    IsogridPreferences,
+    IsogridJobProperties,
+    ISOGRID_OT_TestConnection,
+    ISOGRID_OT_SubmitJob,
+    ISOGRID_OT_CancelPolling,
+    ISOGRID_OT_OpenDashboard,
+    ISOGRID_OT_CopyJobID,
+    ISOGRID_OT_OpenJobDownload,
+    ISOGRID_PT_RenderPanel,
 )
 
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.tether_job = bpy.props.PointerProperty(type=TetherJobProperties)
+    bpy.types.Scene.isogrid_job = bpy.props.PointerProperty(type=IsogridJobProperties)
 
 
 def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
-    del bpy.types.Scene.tether_job
+    del bpy.types.Scene.isogrid_job
 
 
 if __name__ == "__main__":

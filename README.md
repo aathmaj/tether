@@ -1,6 +1,6 @@
-# Tether: Decentralized P2P Compute Fabric
+# Isogrid: Decentralized P2P Compute Fabric
 
-Tether is a decentralized compute coordination layer for asynchronous tasks, namely blender rendering. It captures spare CPU/GPU headroom on participating machines and coordinates chunked rendering across a fleet.
+Isogrid is a decentralized compute coordination layer for asynchronous tasks, namely blender rendering. It captures spare CPU/GPU headroom on participating machines and coordinates chunked rendering across a fleet.
 
 It is part phase 1 of 4, to a complete DePIN stack.
 
@@ -54,7 +54,7 @@ This version improves:
 
 - `backend/orchestrator.py`: FastAPI scheduler/control plane + stitcher + persistence.
 - `workers/node_agent.py`: worker runtime and Blender execution flow.
-- `clients/cli/tether_cli.py`: operator/consumer command line client.
+- `clients/cli/isogrid_cli.py`: operator/consumer command line client.
 - `clients/blender/blender_addon.py`: Blender plugin for submit + status polling.
 - `clients/blender/dashboard.html`: browser dashboard for fleet and queue monitoring.
 - `jobs/`: uploaded `.blend` inputs.
@@ -100,7 +100,7 @@ pip install fastapi uvicorn python-dotenv requests python-multipart urllib3 ngro
 
 - Orchestrator needs FastAPI stack and optional `ngrok`, `boto3/botocore`, FFmpeg.
 - Node Agent needs `requests`, `urllib3`, and optionally `psutil/pynvml` for telemetry.
-- Tether CLI needs `typer`, `rich`, `requests`, and `python-dotenv`.
+- Isogrid CLI needs `typer`, `rich`, `requests`, and `python-dotenv`.
 - Blender add-on uses Blender Python plus `requests`.
 
 ## Install
@@ -291,10 +291,10 @@ Use this to submit and monitor render jobs.
 CLI path:
 
 ```bash
-python clients/cli/tether_cli.py upload scene.blend
-python clients/cli/tether_cli.py submit scene.blend --start 1 --end 120 --chunk 10 --replicas 1
-python clients/cli/tether_cli.py watch <job_id>
-python clients/cli/tether_cli.py download <job_id>
+python clients/cli/isogrid_cli.py upload scene.blend
+python clients/cli/isogrid_cli.py submit scene.blend --start 1 --end 120 --chunk 10 --replicas 1
+python clients/cli/isogrid_cli.py watch <job_id>
+python clients/cli/isogrid_cli.py download <job_id>
 ```
 
 Note: `submit` auto-uploads by default and uses the returned upload token automatically. If you disable auto-upload, pass `--token <upload_token>` from a prior `upload` call.
@@ -303,7 +303,7 @@ Blender path:
 
 - Install and enable `clients/blender/blender_addon.py`.
 - Set add-on `Orchestrator URL` and `API Key`.
-- Submit from Render Properties -> Tether Render Farm panel.
+- Submit from Render Properties -> Isogrid Render Farm panel.
 
 ## Public Production Preset Workflow
 
@@ -362,36 +362,36 @@ DRY_RUN=true python workers/node_agent.py
 Upload + submit + monitor:
 
 ```bash
-python clients/cli/tether_cli.py upload scene.blend
-python clients/cli/tether_cli.py submit scene.blend --start 1 --end 120 --chunk 10 --replicas 2
-python clients/cli/tether_cli.py watch <job_id>
-python clients/cli/tether_cli.py download <job_id>
+python clients/cli/isogrid_cli.py upload scene.blend
+python clients/cli/isogrid_cli.py submit scene.blend --start 1 --end 120 --chunk 10 --replicas 2
+python clients/cli/isogrid_cli.py watch <job_id>
+python clients/cli/isogrid_cli.py download <job_id>
 ```
 
 No-auto-upload flow:
 
 ```bash
-python clients/cli/tether_cli.py upload scene.blend
-python clients/cli/tether_cli.py submit scene.blend --start 1 --end 120 --no-auto-upload --token <upload_token>
+python clients/cli/isogrid_cli.py upload scene.blend
+python clients/cli/isogrid_cli.py submit scene.blend --start 1 --end 120 --no-auto-upload --token <upload_token>
 ```
 
 Useful CLI commands:
 
-- `python clients/cli/tether_cli.py jobs`
-- `python clients/cli/tether_cli.py status <job_id>`
-- `python clients/cli/tether_cli.py workers`
-- `python clients/cli/tether_cli.py metrics`
-- `python clients/cli/tether_cli.py uploads`
+- `python clients/cli/isogrid_cli.py jobs`
+- `python clients/cli/isogrid_cli.py status <job_id>`
+- `python clients/cli/isogrid_cli.py workers`
+- `python clients/cli/isogrid_cli.py metrics`
+- `python clients/cli/isogrid_cli.py uploads`
 
 ### Option B: Blender Add-on (Detailed)
 
 1. Open Blender.
 2. Go to Edit -> Preferences -> Add-ons.
-3. Click Install, choose `clients/blender/blender_addon.py`, and enable "Tether Render Farm".
+3. Click Install, choose `clients/blender/blender_addon.py`, and enable "Isogrid Render Farm".
 4. In add-on preferences, set:
   - `Orchestrator URL` (local URL, LAN URL, or public ngrok/domain URL)
   - `API Key` (must match `ORCHESTRATOR_API_KEY` if auth is enabled)
-5. Open Render Properties (camera icon) -> Tether Render Farm panel.
+5. Open Render Properties (camera icon) -> Isogrid Render Farm panel.
 6. Configure job controls:
   - Frame range from scene (`frame_start`, `frame_end`)
   - `chunk_size`
@@ -400,7 +400,7 @@ Useful CLI commands:
   - `pack_textures` toggle
   - `stitch_output` toggle
 7. Click Test Connection.
-8. Click Submit to Tether.
+8. Click Submit to Isogrid.
 9. Watch live status/progress in Blender (queued/running/stitching/complete/failed).
 10. Use Stop Watching to stop polling if needed.
 11. Optional: use Copy Job ID / Open Download URL controls in the status box.
@@ -428,7 +428,7 @@ How the add-on submits:
 ```bash
 git init
 git add .
-git commit -m "Tether orchestrator with tokenized upload flow"
+git commit -m "Isogrid orchestrator with tokenized upload flow"
 git branch -M main
 git remote add origin https://github.com/<your-user>/<your-repo>.git
 git push -u origin main
@@ -444,14 +444,14 @@ git push -u origin main
   - `UPLOAD_TOKEN_TTL_SECONDS` (optional)
   - Any other production values from `.env.public-production.example`
 5. Wait for deploy and open the generated service domain, for example:
-  - `https://tether-orchestrator.railway.app`
+  - `https://isogrid-orchestrator.railway.app`
 
 ### 3. Point all node agents to cloud URL
 
 On every worker machine, update `.env`:
 
 ```env
-ORCHESTRATOR_URL=https://tether-orchestrator.railway.app
+ORCHESTRATOR_URL=https://isogrid-orchestrator.railway.app
 ORCHESTRATOR_API_KEY=<same value set on Railway>
 ```
 
@@ -469,10 +469,10 @@ python workers/node_agent.py
 ### 5. Verify production flow
 
 ```bash
-python clients/cli/tether_cli.py upload scene.blend
-python clients/cli/tether_cli.py submit scene.blend --start 1 --end 20
-python clients/cli/tether_cli.py watch <job_id>
-python clients/cli/tether_cli.py workers
+python clients/cli/isogrid_cli.py upload scene.blend
+python clients/cli/isogrid_cli.py submit scene.blend --start 1 --end 20
+python clients/cli/isogrid_cli.py watch <job_id>
+python clients/cli/isogrid_cli.py workers
 ```
 
 If Blender reports missing `requests`, install it in Blender's Python environment:

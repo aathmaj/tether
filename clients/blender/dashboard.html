@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tether — Fleet Dashboard</title>
+<title>Isogrid — Fleet Dashboard</title>
 <style>
   :root {
     --bg:      #F8F9FC;
@@ -150,7 +150,7 @@
 <!-- Header -->
 <div class="header">
   <div class="dot" id="connDot"></div>
-  <h1>Tether</h1>
+  <h1>Isogrid</h1>
   <span class="url-badge" id="urlBadge" onclick="openConfig()">⚙ localhost:8000</span>
   <span class="refresh-badge" id="refreshBadge">Connecting...</span>
 </div>
@@ -237,8 +237,8 @@
 <script>
 // ── Config ────────────────────────────────────────────────────────────────────
 let config = {
-  url: localStorage.getItem('tether_url') || 'http://localhost:8000',
-  key: localStorage.getItem('tether_key') || '',
+  url: localStorage.getItem('isogrid_url') || 'http://localhost:8000',
+  key: localStorage.getItem('isogrid_key') || '',
 };
 let refreshInterval = null;
 let selectedJobId   = null;
@@ -263,8 +263,8 @@ function closeConfig() {
 function saveConfig() {
   config.url = document.getElementById('inputUrl').value.trim().replace(/\/+$/, '');
   config.key = document.getElementById('inputKey').value.trim();
-  localStorage.setItem('tether_url', config.url);
-  localStorage.setItem('tether_key', config.key);
+  localStorage.setItem('isogrid_url', config.url);
+  localStorage.setItem('isogrid_key', config.key);
   document.getElementById('urlBadge').textContent = '⚙ ' + config.url.replace('http://', '').replace('https://', '');
   closeConfig();
   refresh();
