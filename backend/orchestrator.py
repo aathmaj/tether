@@ -163,9 +163,31 @@ class VerificationStatus(str, Enum):
     skipped   = "skipped"     # replication_factor == 1
 
 
+class JobKind(str, Enum):
+    blender_render   = "blender_render"
+    ffmpeg_transcode  = "ffmpeg_transcode"
+    scipy_numpy       = "scipy_numpy"
+    python_script     = "python_script"
+    shell_script      = "shell_script"
+    stable_diffusion  = "stable_diffusion"
+    llm_inference     = "llm_inference"
+    whisper_transcribe = "whisper_transcribe"
+
+
 class CreateJobRequest(BaseModel):
-    file_name:          str = Field(description="Blend file under ./jobs/ or an S3 object key")
+    file_name:          str = Field(description="Uploaded input asset name under ./jobs/ or an S3 object key")
     upload_token:       str = Field(min_length=8, description="Token returned by POST /upload")
+    job_kind:           JobKind = Field(default=JobKind.blender_render, description="Workload family to execute")
+    executor_image:     Optional[str] = Field(default=None, description="Approved container image for generic workloads")
+    executor_command:   Optional[str] = Field(default=None, description="Approved command entrypoint for generic workloads")
+    executor_args:      List[str] = Field(default_factory=list, description="Optional argv-style arguments for the executor")
+    model_name:         Optional[str] = Field(default=None, description="Optional ML model name (for ML workloads)")
+    gpu_vram_required:  Optional[int] = Field(default=None, description="GPU VRAM (MB) required by this job, if any")
+    preferred_executor_image: Optional[str] = Field(default=None, description="Preferred executor image for this job")
+    sandbox_cpu_limit:  Optional[int] = Field(default=None, description="CPU cores limit for container (e.g., 1, 2)")
+    sandbox_memory_mb:  Optional[int] = Field(default=None, description="Memory limit in MB for container")
+    sandbox_network:    str = Field(default="none", description="Network mode: 'none' (isolated) or 'bridge' (default)")
+    require_attestation: bool = Field(default=False, description="Require executor attestation (signature verification)")
     frame_start:        int = Field(ge=1)
     frame_end:          int = Field(ge=1)
     chunk_size:         int = Field(default=5, ge=1)
@@ -191,6 +213,7 @@ class TaskReplica(BaseModel):
 
 class JobTask(BaseModel):
     task_id:             str
+    job_kind:            JobKind = JobKind.blender_render
     frame_start:         int
     frame_end:           int
     status:              TaskStatus = TaskStatus.queued
@@ -209,6 +232,17 @@ class JobRecord(BaseModel):
     job_id:             str
     file_name:          str
     file_sha256:        str
+    job_kind:           JobKind = JobKind.blender_render
+    executor_image:     Optional[str] = None
+    executor_command:   Optional[str] = None
+    executor_args:      List[str] = Field(default_factory=list)
+    model_name:         Optional[str] = None
+    gpu_vram_required:  Optional[int] = None
+    preferred_executor_image: Optional[str] = None
+    sandbox_cpu_limit:  Optional[int] = None
+    sandbox_memory_mb:  Optional[int] = None
+    sandbox_network:    str = "none"
+    require_attestation: bool = False
     frame_start:        int
     frame_end:          int
     chunk_size:         int
@@ -277,6 +311,17 @@ class ClaimTaskResponse(BaseModel):
     replica_id:    Optional[str] = None
     file_name:     Optional[str] = None
     file_sha256:   Optional[str] = None
+    job_kind:      Optional[JobKind] = None
+    executor_image: Optional[str] = None
+    executor_command: Optional[str] = None
+    executor_args: List[str] = Field(default_factory=list)
+    model_name: Optional[str] = None
+    gpu_vram_required: Optional[int] = None
+    preferred_executor_image: Optional[str] = None
+    sandbox_cpu_limit: Optional[int] = None
+    sandbox_memory_mb: Optional[int] = None
+    sandbox_network: str = "none"
+    require_attestation: bool = False
     frame_start:   Optional[int] = None
     frame_end:     Optional[int] = None
     lease_seconds: int = TASK_LEASE_SECONDS
@@ -508,6 +553,12 @@ class OrchestratorState:
         for job in ordered:
             if job.status not in (JobStatus.pending, JobStatus.running):
                 continue
+            # Check if worker has sufficient GPU VRAM for this job
+            worker = self.workers.get(worker_id)
+            if worker and job.gpu_vram_required and job.gpu_vram_required > (worker.gpu_vram_mb or 0):
+                logger.debug("Worker %s has insufficient VRAM (%d MB < %d MB required)",
+                           worker_id[:8], worker.gpu_vram_mb or 0, job.gpu_vram_required)
+                continue
             for task in job.tasks:
                 if task.status not in (TaskStatus.queued, TaskStatus.running):
                     continue
@@ -634,8 +685,6 @@ def verify_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
 @app.post("/upload", dependencies=[Depends(verify_api_key)])
 async def upload_blend_file(file: UploadFile = File(...)) -> Dict:
     safe_name = os.path.basename(file.filename or "scene.blend")
-    if not safe_name.endswith(".blend"):
-        raise HTTPException(status_code=400, detail="Only .blend files accepted")
     dest = JOBS_DIR / safe_name
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -655,7 +704,7 @@ async def upload_blend_file(file: UploadFile = File(...)) -> Dict:
         state.uploads[safe_name] = upload
         state.save_upload(upload)
 
-    logger.info("Uploaded blend file: %s (%s)", safe_name, sha[:8])
+    logger.info("Uploaded asset: %s (%s)", safe_name, sha[:8])
 
     if USE_S3:
         s3 = get_s3_client()
@@ -696,6 +745,39 @@ def create_job(payload: CreateJobRequest) -> JobRecord:
     if payload.frame_end < payload.frame_start:
         raise HTTPException(status_code=400, detail="frame_end must be >= frame_start")
 
+    if payload.job_kind == JobKind.blender_render:
+        executor_image = payload.executor_image or os.getenv("BLENDER_IMAGE", "linuxserver/blender:latest")
+        executor_command = payload.executor_command or "blender"
+    else:
+        # Provide sensible defaults for common non-Blender job kinds so CLI users
+        # don't always need to specify an image and entrypoint.
+        if payload.job_kind == JobKind.ffmpeg_transcode:
+            executor_image = payload.executor_image or os.getenv("FFMPEG_EXECUTOR_IMAGE", "jrottenberg/ffmpeg:4.4-ubuntu")
+            executor_command = payload.executor_command or "ffmpeg"
+        elif payload.job_kind == JobKind.stable_diffusion:
+            executor_image = payload.executor_image or os.getenv("DEFAULT_STABLE_DIFFUSION_IMAGE", "ghcr.io/huggingface/text-generation-inference:latest")
+            executor_command = payload.executor_command or "python"
+        elif payload.job_kind == JobKind.llm_inference:
+            executor_image = payload.executor_image or os.getenv("DEFAULT_LLM_IMAGE", "pytorch/torchserve:latest")
+            executor_command = payload.executor_command or "python"
+        elif payload.job_kind == JobKind.whisper_transcribe:
+            executor_image = payload.executor_image or os.getenv("DEFAULT_WHISPER_IMAGE", "ghcr.io/openai/whisper:latest")
+            executor_command = payload.executor_command or "python"
+        elif payload.job_kind in (JobKind.python_script, JobKind.scipy_numpy):
+            executor_image = payload.executor_image or os.getenv("PYTHON_EXECUTOR_IMAGE", "python:3.11-slim")
+            executor_command = payload.executor_command or "python"
+        elif payload.job_kind == JobKind.shell_script:
+            executor_image = payload.executor_image or os.getenv("SHELL_EXECUTOR_IMAGE", "alpine:latest")
+            executor_command = payload.executor_command or "sh"
+        else:
+            if not payload.executor_image or not payload.executor_command:
+                raise HTTPException(
+                    status_code=400,
+                    detail="executor_image and executor_command are required for this job kind",
+                )
+            executor_image = payload.executor_image
+            executor_command = payload.executor_command
+
     source_file = JOBS_DIR / payload.file_name
     if not source_file.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {payload.file_name}. Upload it first via POST /upload")
@@ -734,6 +816,7 @@ def create_job(payload: CreateJobRequest) -> JobRecord:
         ]
         tasks.append(JobTask(
             task_id     = str(uuid.uuid4()),
+            job_kind    = payload.job_kind,
             frame_start = cursor,
             frame_end   = end,
             status      = TaskStatus.queued,
@@ -747,6 +830,17 @@ def create_job(payload: CreateJobRequest) -> JobRecord:
         job_id             = str(uuid.uuid4()),
         file_name          = payload.file_name,
         file_sha256        = current_sha,
+        job_kind           = payload.job_kind,
+        executor_image     = executor_image,
+        executor_command   = executor_command,
+        executor_args      = payload.executor_args,
+        model_name         = payload.model_name,
+        gpu_vram_required  = payload.gpu_vram_required,
+        preferred_executor_image = payload.preferred_executor_image,
+        sandbox_cpu_limit  = payload.sandbox_cpu_limit,
+        sandbox_memory_mb  = payload.sandbox_memory_mb,
+        sandbox_network    = payload.sandbox_network,
+        require_attestation = payload.require_attestation,
         frame_start        = payload.frame_start,
         frame_end          = payload.frame_end,
         chunk_size         = payload.chunk_size,
@@ -900,6 +994,17 @@ def claim_task(payload: ClaimTaskRequest) -> ClaimTaskResponse:
             replica_id    = replica.replica_id,
             file_name     = job.file_name,
             file_sha256   = job.file_sha256,
+            job_kind      = job.job_kind,
+            executor_image = job.executor_image,
+            executor_command = job.executor_command,
+            executor_args = job.executor_args,
+            model_name    = job.model_name,
+            gpu_vram_required = job.gpu_vram_required,
+            preferred_executor_image = job.preferred_executor_image,
+            sandbox_cpu_limit = job.sandbox_cpu_limit,
+            sandbox_memory_mb = job.sandbox_memory_mb,
+            sandbox_network = job.sandbox_network,
+            require_attestation = job.require_attestation,
             frame_start   = task.frame_start,
             frame_end     = task.frame_end,
             lease_seconds = TASK_LEASE_SECONDS,

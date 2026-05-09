@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 import zipfile
+import shlex
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -34,6 +35,12 @@ load_dotenv()
 ORCHESTRATOR_URL         = os.getenv("ORCHESTRATOR_URL", "http://127.0.0.1:8000").rstrip("/")
 ORCHESTRATOR_API_KEY     = os.getenv("ORCHESTRATOR_API_KEY", "")
 IMAGE_NAME               = os.getenv("BLENDER_IMAGE", "linuxserver/blender:latest")
+MODEL_CACHE_DIR          = Path(os.getenv("MODEL_CACHE_DIR", "./model_cache")).resolve()
+DEFAULT_STABLE_DIFFUSION_IMAGE = os.getenv("DEFAULT_STABLE_DIFFUSION_IMAGE", "ghcr.io/huggingface/text-generation-inference:latest")
+DEFAULT_LLM_IMAGE       = os.getenv("DEFAULT_LLM_IMAGE", "pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime")
+DEFAULT_WHISPER_IMAGE   = os.getenv("DEFAULT_WHISPER_IMAGE", "ghcr.io/openai/whisper:latest")
+USE_LOCAL_EXECUTORS     = os.getenv("USE_LOCAL_EXECUTORS", "false").lower() == "true"
+MOCK_EXECUTORS_DIR      = Path(os.getenv("MOCK_EXECUTORS_DIR", "./workers/mock_executors")).resolve()
 LOCAL_DIR                = Path(os.getenv("LOCAL_DIR", "./node_data")).resolve()
 POLL_INTERVAL_SECONDS    = int(os.getenv("POLL_INTERVAL_SECONDS", "5"))
 HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "10"))
@@ -48,6 +55,14 @@ CPU_PAUSE_THRESHOLD      = float(os.getenv("CPU_PAUSE_THRESHOLD", "80.0"))
 GPU_PAUSE_THRESHOLD      = float(os.getenv("GPU_PAUSE_THRESHOLD", "80.0"))  
 
 HEADROOM_CHECK_INTERVAL  = int(os.getenv("HEADROOM_CHECK_INTERVAL", "3"))
+APPROVED_EXECUTOR_IMAGES = {
+    image.strip()
+    for image in os.getenv(
+        "APPROVED_EXECUTOR_IMAGES",
+        "linuxserver/blender:latest,python:3.11-slim,python:3.11-alpine,ubuntu:24.04,alpine:3.20,jrottenberg/ffmpeg:6.1,pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime,tensorflow/tensorflow:2.16.1-gpu",
+    ).split(",")
+    if image.strip()
+}
 
 RUNNING = True
 
@@ -88,6 +103,10 @@ def sample_gpu_percent() -> float:
 
 def sample_gpu_vram_free_mb() -> int:
     
+    if DRY_RUN:
+        # In DRY_RUN mode, simulate a GPU with configurable VRAM for testing ML workloads
+        simulated_vram = int(os.getenv("DRY_RUN_GPU_VRAM_MB", "16384"))
+        return simulated_vram
     if not NVML_AVAILABLE:
         return 99999
     try:
@@ -168,6 +187,7 @@ def setup_node() -> bool:
     LOCAL_DIR.mkdir(parents=True, exist_ok=True)
     (LOCAL_DIR / "frames").mkdir(parents=True, exist_ok=True)
     (LOCAL_DIR / "artifacts").mkdir(parents=True, exist_ok=True)
+    (LOCAL_DIR / "outputs").mkdir(parents=True, exist_ok=True)
 
     if not PSUTIL_AVAILABLE:
         print("[warn] psutil not installed — CPU headroom detection disabled. Run: pip install psutil")
@@ -190,6 +210,7 @@ def setup_node() -> bool:
     print(f"[agent] GPU claim threshold : {GPU_CLAIM_THRESHOLD}%")
     print(f"[agent] CPU pause threshold : {CPU_PAUSE_THRESHOLD}%")
     print(f"[agent] GPU pause threshold : {GPU_PAUSE_THRESHOLD}%")
+    print(f"[agent] Approved executor images : {len(APPROVED_EXECUTOR_IMAGES)}")
     return True
 
 
@@ -218,6 +239,26 @@ def file_sha256(file_path: Path) -> str:
         for block in iter(lambda: f.read(1024 * 1024), b""):
             sha.update(block)
     return sha.hexdigest()
+
+
+def build_docker_run_cmd_base(executor_image: str, network_mode: str = "none", cpu_limit: Optional[int] = None, memory_mb: Optional[int] = None) -> List[str]:
+    """Build the base docker run command with resource limits and network isolation."""
+    cmd = [
+        "docker", "run",
+        "--rm",
+        "--detach",
+    ]
+    if network_mode == "none":
+        cmd.append("--network=none")
+    elif network_mode == "bridge":
+        cmd.append("--network=bridge")
+    if cpu_limit:
+        cmd.extend(["--cpus", str(cpu_limit)])
+    if memory_mb:
+        cmd.extend(["--memory", f"{memory_mb}m"])
+    cmd.extend(["-v", f"{LOCAL_DIR}:/data"])
+    cmd.append(executor_image)
+    return cmd
 
 
 def detect_memory_mb() -> int:
@@ -307,6 +348,31 @@ def ensure_job_file(session: requests.Session, filename: str, expected_hash: str
     return target
 
 
+def ensure_model_cached(model_name: Optional[str]) -> Optional[Path]:
+    """Ensure a named model is present in the local model cache. Returns path or None."""
+    if not model_name:
+        return None
+    MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    marker = MODEL_CACHE_DIR / model_name
+    if marker.exists():
+        print(f"[agent] Model cache hit: {model_name}")
+        return marker
+    # In DRY_RUN create a small placeholder; in real deployments this should
+    # fetch the model weights or containerized model bundle.
+    if DRY_RUN:
+        marker.write_text(f"placeholder for {model_name}", encoding="utf-8")
+        print(f"[agent] DRY_RUN: created model placeholder: {marker}")
+        return marker
+    # Non-DRY: attempt to simulate a download by creating a marker file.
+    try:
+        marker.write_text(f"cached model {model_name}", encoding="utf-8")
+        print(f"[agent] Cached model: {model_name} -> {marker}")
+        return marker
+    except Exception as exc:
+        print(f"[agent] Failed to cache model {model_name}: {exc}")
+        return None
+
+
 # Render logic
 def simulate_render(frame_start: int, frame_end: int, prefix: str) -> List[Path]:
     output_paths: List[Path] = []
@@ -315,6 +381,17 @@ def simulate_render(frame_start: int, frame_end: int, prefix: str) -> List[Path]
         path.write_bytes(f"simulated frame {frame}\n".encode())
         output_paths.append(path)
     return output_paths
+
+
+def simulate_generic_output(prefix: str, job_kind: str, job_file: Path) -> List[Path]:
+    output_dir = LOCAL_DIR / "outputs" / prefix
+    output_dir.mkdir(parents=True, exist_ok=True)
+    result_file = output_dir / f"{job_kind}_result.txt"
+    result_file.write_text(
+        f"simulated {job_kind} output\ninput={job_file.name}\n",
+        encoding="utf-8",
+    )
+    return [result_file]
 
 
 def run_blender_render(job_file: Path, frame_start: int, frame_end: int, prefix: str) -> List[Path]:
@@ -373,12 +450,335 @@ def run_blender_render(job_file: Path, frame_start: int, frame_end: int, prefix:
     return produced
 
 
+def run_generic_executor(
+    job_kind: str,
+    job_file: Path,
+    executor_image: str,
+    executor_command: str,
+    executor_args: List[str],
+    frame_start: int,
+    frame_end: int,
+    prefix: str,
+    sandbox_cpu_limit: Optional[int] = None,
+    sandbox_memory_mb: Optional[int] = None,
+    sandbox_network: str = "none",
+) -> List[Path]:
+    global _active_container, _container_paused
+
+    if executor_image not in APPROVED_EXECUTOR_IMAGES and not (USE_LOCAL_EXECUTORS or executor_image.startswith("mock:")):
+        raise RuntimeError(f"Executor image not approved: {executor_image}")
+
+    if DRY_RUN:
+        return simulate_generic_output(prefix, job_kind, job_file)
+
+    output_dir = LOCAL_DIR / "outputs" / prefix
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[agent] Running {job_kind} job {frame_start}–{frame_end} using {executor_image}")
+    # Support local mock executors for fast integration testing (no Docker required).
+    if USE_LOCAL_EXECUTORS or executor_image.startswith("mock:"):
+        # Map executor image to a local mock script if available.
+        kind = executor_image.split(":", 1)[1] if executor_image.startswith("mock:") else "generic"
+        script = MOCK_EXECUTORS_DIR / f"{kind}_mock.py"
+        if script.exists():
+            cmd = [sys.executable, str(script), str(job_file), str(LOCAL_DIR / "outputs" / prefix)]
+            cmd.extend(executor_args or [])
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            container_id = f"mock:{kind}:{int(time.time())}"
+        else:
+            raise RuntimeError(f"Mock executor not found: {script}")
+    else:
+        docker_cmd = build_docker_run_cmd_base(
+            executor_image,
+            network_mode=sandbox_network,
+            cpu_limit=sandbox_cpu_limit,
+            memory_mb=sandbox_memory_mb,
+        )
+        docker_cmd.extend(shlex.split(executor_command))
+        docker_cmd.extend(executor_args)
+        docker_cmd.extend([
+            f"/data/{job_file.name}",
+            f"/data/outputs/{prefix}",
+        ])
+
+        result = subprocess.run(docker_cmd, check=True, capture_output=True, text=True)
+        container_id = result.stdout.strip()
+    print(f"[agent] Container started: {container_id[:12]}")
+
+    with _lock:
+        _active_container = container_id
+        _container_paused = False
+
+    try:
+        subprocess.run(["docker", "wait", container_id], check=True, capture_output=True)
+    finally:
+        with _lock:
+            _active_container = None
+            _container_paused = False
+
+    produced: List[Path] = []
+    for candidate in sorted(output_dir.rglob("*")):
+        if candidate.is_file():
+            produced.append(candidate)
+
+    if not produced:
+        logs = subprocess.run(
+            ["docker", "logs", container_id],
+            capture_output=True, text=True
+        ).stderr[-1000:]
+        raise RuntimeError(f"No output produced. Last log:\n{logs}")
+
+    return produced
+
+
+def run_ffmpeg_transcode(
+    job_file: Path,
+    executor_image: str,
+    executor_args: List[str],
+    prefix: str,
+) -> List[Path]:
+    """Run an ffmpeg transcode inside the approved executor image.
+
+    Produces a single output file at /data/outputs/<prefix>/out.mp4
+    """
+    global _active_container, _container_paused
+
+    if executor_image not in APPROVED_EXECUTOR_IMAGES:
+        raise RuntimeError(f"Executor image not approved: {executor_image}")
+
+    if DRY_RUN:
+        return simulate_generic_output(prefix, "ffmpeg_transcode", job_file)
+
+    output_dir = LOCAL_DIR / "outputs" / prefix
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path_container = f"/data/outputs/{prefix}/out.mp4"
+    print(f"[agent] Transcoding {job_file.name} → {out_path_container} using {executor_image}")
+
+    docker_cmd = [
+        "docker", "run",
+        "--rm",
+        "--detach",
+        "-v", f"{LOCAL_DIR}:/data",
+        executor_image,
+        "ffmpeg",
+        "-y",
+        "-i",
+        f"/data/{job_file.name}",
+    ]
+    docker_cmd.extend(executor_args or [])
+    docker_cmd.append(out_path_container)
+
+    result = subprocess.run(docker_cmd, check=True, capture_output=True, text=True)
+    container_id = result.stdout.strip()
+    print(f"[agent] Container started: {container_id[:12]}")
+
+    with _lock:
+        _active_container = container_id
+        _container_paused = False
+
+    try:
+        subprocess.run(["docker", "wait", container_id], check=True, capture_output=True)
+    finally:
+        with _lock:
+            _active_container = None
+            _container_paused = False
+
+    produced: List[Path] = []
+    for candidate in sorted(output_dir.rglob("*")):
+        if candidate.is_file():
+            produced.append(candidate)
+
+    if not produced:
+        logs = subprocess.run([
+            "docker", "logs", container_id
+        ], capture_output=True, text=True).stderr[-1000:]
+        raise RuntimeError(f"No output produced. Last log:\n{logs}")
+
+    return produced
+
+
+def run_stable_diffusion_executor(
+    job_file: Path,
+    model_name: Optional[str],
+    executor_image: str,
+    executor_args: List[str],
+    prefix: str,
+) -> List[Path]:
+    """Scaffold to run a Stable Diffusion-style job inside a container.
+
+    This is a best-effort helper: it validates model cache and launches the
+    container with the dataset and model path mounted under /data/models.
+    """
+    global _active_container, _container_paused
+
+    if executor_image not in APPROVED_EXECUTOR_IMAGES:
+        raise RuntimeError(f"Executor image not approved: {executor_image}")
+
+    # Ensure model is available locally
+    model_path = ensure_model_cached(model_name)
+    if model_name and not model_path:
+        raise RuntimeError(f"Required model not available: {model_name}")
+
+    if DRY_RUN:
+        return simulate_generic_output(prefix, "stable_diffusion", job_file)
+
+    output_dir = LOCAL_DIR / "outputs" / prefix
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Common invocation: container expects model at /data/models/<model_name>
+    container_model_path = f"/data/models/{model_name or 'model'}"
+    out_path = f"/data/outputs/{prefix}/sd_out.png"
+
+    docker_cmd = [
+        "docker", "run",
+        "--rm",
+        "--detach",
+        "-v", f"{LOCAL_DIR}:/data",
+        executor_image,
+    ]
+    # basic command: let executor_args drive the real invocation
+    docker_cmd.extend(executor_args or [])
+    docker_cmd.extend([str(job_file), container_model_path, out_path])
+
+    result = subprocess.run(docker_cmd, check=True, capture_output=True, text=True)
+    container_id = result.stdout.strip()
+    print(f"[agent] Container started: {container_id[:12]}")
+
+    with _lock:
+        _active_container = container_id
+        _container_paused = False
+
+    try:
+        subprocess.run(["docker", "wait", container_id], check=True, capture_output=True)
+    finally:
+        with _lock:
+            _active_container = None
+            _container_paused = False
+
+    produced: List[Path] = []
+    for candidate in sorted(output_dir.rglob("*")):
+        if candidate.is_file():
+            produced.append(candidate)
+
+    if not produced:
+        logs = subprocess.run([
+            "docker", "logs", container_id
+        ], capture_output=True, text=True).stderr[-1000:]
+        raise RuntimeError(f"No output produced. Last log:\n{logs}")
+
+    return produced
+
+
+def run_llm_executor(
+    job_file: Path,
+    model_name: Optional[str],
+    executor_image: str,
+    executor_args: List[str],
+    prefix: str,
+) -> List[Path]:
+    """Scaffold to run an LLM inference job inside a container.
+
+    Writes outputs to /data/outputs/<prefix>/llm_out.txt
+    """
+    if executor_image not in APPROVED_EXECUTOR_IMAGES:
+        raise RuntimeError(f"Executor image not approved: {executor_image}")
+
+    model_path = ensure_model_cached(model_name)
+    if model_name and not model_path:
+        raise RuntimeError(f"Required model not available: {model_name}")
+
+    if DRY_RUN:
+        return simulate_generic_output(prefix, "llm_inference", job_file)
+
+    output_dir = LOCAL_DIR / "outputs" / prefix
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    out_file = output_dir / "llm_out.txt"
+
+    docker_cmd = [
+        "docker", "run",
+        "--rm",
+        "--detach",
+        "-v", f"{LOCAL_DIR}:/data",
+        executor_image,
+    ]
+    docker_cmd.extend(executor_args or [])
+    docker_cmd.extend([str(job_file), f"/data/outputs/{prefix}"])
+
+    result = subprocess.run(docker_cmd, check=True, capture_output=True, text=True)
+    container_id = result.stdout.strip()
+
+    with _lock:
+        _active_container = container_id
+        _container_paused = False
+
+    try:
+        subprocess.run(["docker", "wait", container_id], check=True, capture_output=True)
+    finally:
+        with _lock:
+            _active_container = None
+            _container_paused = False
+
+    produced = []
+    for candidate in sorted(output_dir.rglob("*")):
+        if candidate.is_file():
+            produced.append(candidate)
+    if not produced:
+        logs = subprocess.run(["docker", "logs", container_id], capture_output=True, text=True).stderr[-1000:]
+        raise RuntimeError(f"No output produced. Last log:\n{logs}")
+    return produced
+
+
+def run_whisper_executor(
+    job_file: Path,
+    executor_image: str,
+    executor_args: List[str],
+    prefix: str,
+) -> List[Path]:
+    if executor_image not in APPROVED_EXECUTOR_IMAGES:
+        raise RuntimeError(f"Executor image not approved: {executor_image}")
+    if DRY_RUN:
+        return simulate_generic_output(prefix, "whisper_transcribe", job_file)
+    output_dir = LOCAL_DIR / "outputs" / prefix
+    output_dir.mkdir(parents=True, exist_ok=True)
+    docker_cmd = [
+        "docker", "run",
+        "--rm",
+        "--detach",
+        "-v", f"{LOCAL_DIR}:/data",
+        executor_image,
+    ]
+    docker_cmd.extend(executor_args or [])
+    docker_cmd.extend([str(job_file), f"/data/outputs/{prefix}"])
+    result = subprocess.run(docker_cmd, check=True, capture_output=True, text=True)
+    container_id = result.stdout.strip()
+    with _lock:
+        _active_container = container_id
+        _container_paused = False
+    try:
+        subprocess.run(["docker", "wait", container_id], check=True, capture_output=True)
+    finally:
+        with _lock:
+            _active_container = None
+            _container_paused = False
+    produced = []
+    for candidate in sorted(output_dir.rglob("*")):
+        if candidate.is_file():
+            produced.append(candidate)
+    if not produced:
+        logs = subprocess.run(["docker", "logs", container_id], capture_output=True, text=True).stderr[-1000:]
+        raise RuntimeError(f"No output produced. Last log:\n{logs}")
+    return produced
+
+
 # Package and upload
-def package_frames(job_id: str, task_id: str, frame_files: List[Path]) -> Path:
+def package_artifacts(job_id: str, task_id: str, artifact_files: List[Path]) -> Path:
     zip_path = LOCAL_DIR / "artifacts" / f"{job_id}_{task_id}.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
-        for frame in frame_files:
-            zipf.write(frame, arcname=frame.name)
+        for artifact in artifact_files:
+            if artifact.is_file():
+                zipf.write(artifact, arcname=artifact.name)
     return zip_path
 
 
@@ -494,14 +894,68 @@ def run_agent() -> None:
             frame_end   = int(assignment["frame_end"])
             file_name   = assignment["file_name"]
             file_sha    = assignment["file_sha256"]
+            job_kind    = assignment.get("job_kind", "blender_render")
+            executor_image = assignment.get("executor_image") or IMAGE_NAME
+            executor_command = assignment.get("executor_command") or "blender"
+            executor_args = list(assignment.get("executor_args") or [])
             replica_id  = assignment.get("replica_id", "")
             prefix      = f"{job_id}_{task_id}_"
+            sandbox_cpu_limit = assignment.get("sandbox_cpu_limit")
+            sandbox_memory_mb = assignment.get("sandbox_memory_mb")
+            sandbox_network = assignment.get("sandbox_network", "none")
+            require_attestation = assignment.get("require_attestation", False)
 
             print(f"[agent] Claimed task {task_id} | frames {frame_start}–{frame_end}")
 
             job_file    = ensure_job_file(session, file_name, file_sha)
-            frame_files = run_blender_render(job_file, frame_start, frame_end, prefix)
-            artifact    = package_frames(job_id, task_id, frame_files)
+            if job_kind == "blender_render":
+                output_files = run_blender_render(job_file, frame_start, frame_end, prefix)
+            elif job_kind == "ffmpeg_transcode":
+                output_files = run_ffmpeg_transcode(
+                    job_file,
+                    executor_image,
+                    executor_args,
+                    prefix,
+                )
+            elif job_kind == "stable_diffusion":
+                output_files = run_stable_diffusion_executor(
+                    job_file,
+                    assignment.get("model_name"),
+                    executor_image,
+                    executor_args,
+                    prefix,
+                )
+            elif job_kind == "llm_inference":
+                output_files = run_llm_executor(
+                    job_file,
+                    assignment.get("model_name"),
+                    executor_image,
+                    executor_args,
+                    prefix,
+                )
+            elif job_kind == "whisper_transcribe":
+                output_files = run_whisper_executor(
+                    job_file,
+                    executor_image,
+                    executor_args,
+                    prefix,
+                )
+            else:
+                output_files = run_generic_executor(
+                    job_kind,
+                    job_file,
+                    executor_image,
+                    executor_command,
+                    executor_args,
+                    frame_start,
+                    frame_end,
+                    prefix,
+                    sandbox_cpu_limit=sandbox_cpu_limit,
+                    sandbox_memory_mb=sandbox_memory_mb,
+                    sandbox_network=sandbox_network,
+                )
+
+            artifact    = package_artifacts(job_id, task_id, output_files)
             upload_artifact(session, job_id, task_id, replica_id, artifact)
 
             print(f"[agent] ✓ Task {task_id} complete")

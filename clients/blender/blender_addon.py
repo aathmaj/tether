@@ -38,11 +38,54 @@ class IsogridPreferences(bpy.types.AddonPreferences):
         subtype = "PASSWORD",
         description = "ORCHESTRATOR_API_KEY (leave blank if not set)",
     )
+    estimate_currency: bpy.props.StringProperty(
+        name    = "Estimate Currency",
+        default = "ISO tokens",
+        description = "Label used for the job cost estimate",
+    )
+    estimate_base_cost: bpy.props.FloatProperty(
+        name    = "Base Job Cost",
+        default = 0.25,
+        min     = 0.0,
+        description = "Flat cost added to every job estimate",
+    )
+    estimate_frame_cost: bpy.props.FloatProperty(
+        name    = "Frame Cost",
+        default = 0.02,
+        min     = 0.0,
+        description = "Cost per rendered frame before replication",
+    )
+    estimate_replica_cost: bpy.props.FloatProperty(
+        name    = "Replica Surcharge",
+        default = 0.01,
+        min     = 0.0,
+        description = "Additional cost per replicated chunk",
+    )
+    estimate_pack_cost: bpy.props.FloatProperty(
+        name    = "Texture Pack Surcharge",
+        default = 0.05,
+        min     = 0.0,
+        description = "Extra cost when packing textures before upload",
+    )
+    estimate_stitch_cost: bpy.props.FloatProperty(
+        name    = "Stitch Surcharge",
+        default = 0.03,
+        min     = 0.0,
+        description = "Extra cost when auto-assembling the final video",
+    )
 
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "orchestrator_url")
         layout.prop(self, "api_key")
+        layout.separator()
+        layout.label(text="Job Cost Estimate")
+        layout.prop(self, "estimate_currency")
+        layout.prop(self, "estimate_base_cost")
+        layout.prop(self, "estimate_frame_cost")
+        layout.prop(self, "estimate_replica_cost")
+        layout.prop(self, "estimate_pack_cost")
+        layout.prop(self, "estimate_stitch_cost")
 
 
 # Scene Properties
@@ -107,6 +150,20 @@ def build_headers() -> dict:
 
 def get_orchestrator_url() -> str:
     return get_prefs().orchestrator_url.rstrip("/")
+
+
+def estimate_job_cost(scene, props) -> float:
+    prefs = get_prefs()
+    total_frames = max(scene.frame_end - scene.frame_start + 1, 0)
+    chunks = max(-(-total_frames // props.chunk_size), 1)
+    cost = prefs.estimate_base_cost
+    cost += total_frames * prefs.estimate_frame_cost * props.replication_factor
+    cost += chunks * prefs.estimate_replica_cost * max(props.replication_factor - 1, 0)
+    if props.pack_textures:
+        cost += prefs.estimate_pack_cost
+    if props.stitch_output:
+        cost += prefs.estimate_stitch_cost
+    return cost
 
 
 def is_connected() -> bool:
@@ -413,6 +470,8 @@ class ISOGRID_PT_RenderPanel(bpy.types.Panel):
         total_frames = scene.frame_end - scene.frame_start + 1
         chunks       = -(-total_frames // props.chunk_size)   # ceiling division
         layout.label(text=f"{total_frames} frames → {chunks} chunks × {props.replication_factor} replica(s)")
+        cost = estimate_job_cost(scene, props)
+        layout.label(text=f"Estimated cost: {cost:.2f} {prefs.estimate_currency}")
 
         row = layout.row()
         row.scale_y = 1.8

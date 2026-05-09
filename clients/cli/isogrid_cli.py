@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import shlex
 from pathlib import Path
 from typing import Optional
 
@@ -82,7 +83,7 @@ def job_progress(job: dict) -> float:
 def upload(
     blend_file: Path = typer.Argument(..., help="Path to the .blend file to upload"),
 ):
-    """Upload a .blend file to the orchestrator."""
+    """Upload an input asset to the orchestrator."""
     if not blend_file.exists():
         rprint(f"[red]File not found: {blend_file}[/red]")
         raise typer.Exit(1)
@@ -98,7 +99,11 @@ def upload(
 
 @app.command()
 def submit(
-    blend_file: Path = typer.Argument(..., help=".blend file (must be uploaded first, or will auto-upload)"),
+    blend_file: Path = typer.Argument(..., help="Input asset (must be uploaded first, or will auto-upload)"),
+    job_kind:   str  = typer.Option("blender_render", "--job-kind", help="Workload family to execute"),
+    preset:     str  = typer.Option("", "--preset", help="Optional preset: ffmpeg, python, shell, sd, llm, whisper"),
+    model_name: str  = typer.Option("", "--model-name", help="Model name for ML workloads (e.g., stable-diffusion-v1)") ,
+    gpu_vram:   int  = typer.Option(0, "--gpu-vram", help="GPU VRAM (MB) required by this job"),
     start:      int  = typer.Option(1,   "--start", "-s",        help="First frame"),
     end:        int  = typer.Option(...,  "--end",   "-e",        help="Last frame"),
     chunk:      int  = typer.Option(5,   "--chunk",  "-c",        help="Frames per task chunk"),
@@ -108,9 +113,56 @@ def submit(
     no_stitch:  bool = typer.Option(False, "--no-stitch",         help="Skip FFmpeg assembly step"),
     auto_upload: bool = typer.Option(True, "--auto-upload/--no-auto-upload", help="Auto-upload .blend if not on server"),
     upload_token: str = typer.Option("", "--token", help="Upload token returned by /upload (required with --no-auto-upload)"),
+    executor_image: str = typer.Option("", "--executor-image", help="Approved container image for non-Blender jobs"),
+    executor_command: str = typer.Option("", "--executor-command", help="Approved command for non-Blender jobs"),
+    executor_args: str = typer.Option("", "--executor-args", help="Space-separated extra args for the executor"),
+    sandbox_cpu: int = typer.Option(0, "--sandbox-cpu", help="CPU cores limit (0=unlimited)"),
+    sandbox_memory: int = typer.Option(0, "--sandbox-memory", help="Memory limit in MB (0=unlimited)"),
+    sandbox_network: str = typer.Option("none", "--sandbox-network", help="Network mode: 'none' or 'bridge'"),
+    require_attestation: bool = typer.Option(False, "--require-attestation", help="Require executor attestation"),
 ):
-    """Submit a render job. Auto-uploads the .blend file if needed."""
+    """Submit a render or async job. Auto-uploads the input asset if needed."""
     token = upload_token.strip()
+    args = shlex.split(executor_args) if executor_args.strip() else []
+
+    # Apply presets if requested
+    if preset:
+        p = preset.lower()
+        if p == "ffmpeg":
+            job_kind = "ffmpeg_transcode"
+            if not executor_image:
+                executor_image = os.getenv("FFMPEG_EXECUTOR_IMAGE", "jrottenberg/ffmpeg:4.4-ubuntu")
+            if not executor_command:
+                executor_command = "ffmpeg"
+            if not executor_args:
+                executor_args = "-c:v libx264 -crf 23 -preset medium"
+        elif p == "python":
+            job_kind = "python_script"
+            if not executor_image:
+                executor_image = os.getenv("PYTHON_EXECUTOR_IMAGE", "python:3.11-slim")
+            if not executor_command:
+                executor_command = "python"
+        elif p == "shell":
+            job_kind = "shell_script"
+        elif p in ("sd", "stable", "stable-diffusion"):
+            job_kind = "stable_diffusion"
+            if not executor_image:
+                executor_image = os.getenv("DEFAULT_STABLE_DIFFUSION_IMAGE", "ghcr.io/huggingface/text-generation-inference:latest")
+        elif p in ("llm", "tgi", "llm-inference"):
+            job_kind = "llm_inference"
+            if not executor_image:
+                executor_image = os.getenv("DEFAULT_LLM_IMAGE", "pytorch/pytorch:2.5.1-cuda12.1-cudnn9-runtime")
+        elif p in ("whisper", "transcribe"):
+            job_kind = "whisper_transcribe"
+            if not executor_image:
+                executor_image = os.getenv("DEFAULT_WHISPER_IMAGE", "ghcr.io/openai/whisper:latest")
+            if not executor_image:
+                executor_image = os.getenv("SHELL_EXECUTOR_IMAGE", "alpine:latest")
+            if not executor_command:
+                executor_command = "sh"
+        else:
+            rprint(f"[red]Unknown preset: {preset}[/red]")
+            raise typer.Exit(1)
 
     if auto_upload and blend_file.exists():
         console.print(f"Uploading [bold]{blend_file.name}[/bold]...")
@@ -129,6 +181,16 @@ def submit(
     payload = {
         "file_name"         : blend_file.name,
         "upload_token"      : token,
+        "job_kind"          : job_kind,
+        "executor_image"    : executor_image.strip() or None,
+        "executor_command"  : executor_command.strip() or None,
+        "executor_args"     : args,
+        "model_name"        : model_name or None,
+        "gpu_vram_required" : gpu_vram or None,
+        "sandbox_cpu_limit" : sandbox_cpu or None,
+        "sandbox_memory_mb" : sandbox_memory or None,
+        "sandbox_network"   : sandbox_network,
+        "require_attestation": require_attestation,
         "frame_start"       : start,
         "frame_end"         : end,
         "chunk_size"        : chunk,

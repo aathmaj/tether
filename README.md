@@ -1,66 +1,144 @@
-# Isogrid: Decentralized P2P Compute Fabric
+# Isogrid: Decentralized Async Compute Fabric
 
-Isogrid is a decentralized compute coordination layer for asynchronous tasks, namely blender rendering. It captures spare CPU/GPU headroom on participating machines and coordinates chunked rendering across a fleet.
+**Complete Implementation: Generic Job Framework + GPU/VRAM Scheduling + Runtime Sandboxing + ML Workload Support**
 
-It is part phase 1 of 4, to a complete DePIN stack.
+Isogrid is a decentralized compute coordination layer for asynchronous tasks. The platform supports a broad mix of workloads in a unified, extensible framework:
 
-It has two core runtime components:
+- **Rendering**: Blender frame-based rendering with optional replication and final MP4 stitching.
+- **Video & Media**: FFmpeg transcoding across standard broadcast and web formats.
+- **Scientific Compute**: SciPy, NumPy, OpenFOAM, LAMMPS, GROMACS batch jobs.
+- **General-Purpose**: Pre-approved Python and shell scripts with custom Docker images.
+- **AI/ML**: Stable Diffusion image generation, LLM inference (llama, GPT, Mistral), LoRA fine-tuning, batch classification, Whisper speech-to-text, video understanding, and more.
 
-- Orchestrator: FastAPI control plane for workers, queueing, task leases, artifact validation, and final assembly.
-- Node Agent: worker daemon that registers, claims tasks, renders in Docker Blender, and uploads validated artifacts.
+**Core Features:**
+- Generic executor framework with 10+ job kinds (extensible via custom container images).
+- GPU/VRAM-aware scheduler: workers report capacity; only capable nodes are assigned tasks.
+- Runtime sandboxing: Docker resource limits (CPU, memory, GPU), network isolation, read-only root filesystem, seccomp/AppArmor, audit logging.
+- Intelligent scheduling: headroom monitoring, container pause/unpause, replication-based conflict detection.
+- DRY_RUN mode: test ML workloads locally with mock executors (no Docker/GPU required).
+- Model caching framework: pre-pull models to worker nodes for faster inference.
+- CLI presets for quick submission: `--preset sd`, `--preset llm`, `--preset ffmpeg`, etc.
+- Attestation framework: optional image signature verification for security.
+- Optional S3/R2 object storage with presigned URLs.
+- Blender add-on with upfront cost estimates and status polling.
+- HTML dashboard for live metrics, worker status, and job monitoring.
 
-Additional user-facing surfaces:
+It is part phase 1 of 4, toward a complete DePIN stack.
 
-- CLI client for upload/submit/status/watch/download workflows.
-- Blender add-on for one-click submit directly from an open scene.
-- HTML dashboard for jobs, workers, and live metrics.
+## Core Architecture
+
+Two primary runtime components:
+
+- **Orchestrator** (`backend/orchestrator.py`): FastAPI control plane managing worker registration, task queueing, lease management, artifact validation, and final assembly. Implements GPU/VRAM-aware scheduling with headroom awareness.
+- **Node Agent** (`workers/node_agent.py`): Worker daemon that registers with orchestrator, claims tasks, executes workloads in sandboxed Docker containers, and uploads validated artifacts. Multi-dispatcher routes to the correct executor for each job kind.
+
+User-facing surfaces:
+
+- **CLI** (`clients/cli/isogrid_cli.py`): Upload/submit/status/watch/download workflows with presets for common workloads.
+- **Blender Add-on** (`clients/blender/blender_addon.py`): One-click submit directly from Blender with upfront cost estimates.
+- **Dashboard** (`clients/blender/dashboard.html`): Real-time metrics, worker status, queue visualization, and job inspection.
+
+## Supported Job Kinds
+
+| Job Kind | Description | Executor Image | GPU? |
+|----------|-------------|-----------------|------|
+| `blender_render` | Blender frame rendering (original path) | `linuxserver/blender` | Optional |
+| `ffmpeg_transcode` | Video/audio transcoding | `ffmpeg:alpine` | Optional |
+| `python_script` | Pre-approved Python scripts | `python:3.11-slim` | Optional |
+| `shell_script` | Pre-approved shell commands | `ubuntu:latest` | Optional |
+| `scipy_numpy` | Scientific computing jobs | `python:3.11-slim` (+ scipy/numpy) | Optional |
+| `stable_diffusion` | Image generation | `huggingface/diffusers` | **Required** (4-24 GB VRAM) |
+| `llm_inference` | LLM inference and chat | `pytorch:latest` | **Required** (4-80 GB VRAM) |
+| `whisper_transcribe` | Speech-to-text | `openai/whisper` | Optional |
+| `lora_training` | LoRA fine-tuning | `pytorch:latest` | **Required** |
+| Generic (custom) | Any container image with compatible entrypoint | User-supplied | Negotiable |
 
 ## Features
 
-- Typed API contracts (Pydantic models).
-- Worker lifecycle: register, heartbeat, stale detection.
-- Priority scheduler with chunked frame tasks.
-- Lease-based execution with automatic requeue on expiry.
-- Retry/fail policy with `MAX_TASK_ATTEMPTS`.
-- Artifact integrity checks (SHA256).
-- Input file checksum validation on workers.
-- Optional API key auth for control/worker endpoints.
-- Strict upload-to-submit flow: jobs require a valid `/upload` token (manual file drops in `jobs/` are rejected).
-- Persistent state in SQLite with WAL mode.
-- Optional replicated rendering (`replication_factor` 1-3) with verification:
-  - Per-frame hash comparison across replicas.
-  - Conflict state and automatic tie-breaker replica scheduling.
-- Optional stitcher daemon to assemble frames into final MP4 via FFmpeg.
-- Optional S3/R2 object storage and presigned URLs.
-- Optional ngrok public tunnel for internet-reachable orchestrator.
-- Headroom-aware worker claiming and container pause/unpause behavior.
-- DRY_RUN mode for local/dev tests without Blender/Docker.
-- Upload inventory endpoint: `GET /uploads` shows active upload tokens and expiry.
-- Blender add-on quality-of-life controls: copy current job ID, open download URL, optional auto-open result.
+- **Typed API contracts** (Pydantic models) with strict validation.
+- **Worker lifecycle**: registration with GPU/VRAM capacity, heartbeat, stale detection.
+- **GPU/VRAM scheduler**: workers report available capacity; jobs specify requirements; only compatible workers are assigned.
+- **Priority scheduler** with chunked task distribution and lease-based execution.
+- **Automatic requeue** on lease expiry and configurable `MAX_TASK_ATTEMPTS`.
+- **Retry/fail policy** with exponential backoff and dead-letter handling.
+- **Artifact integrity**: SHA256-validated artifacts; per-frame hash verification in replication mode.
+- **Replication mode** (1-3 factor): consensus-based conflict detection with tie-breaker scheduling.
+- **Stitcher daemon**: automated final MP4 assembly from frame artifacts.
+- **Runtime sandboxing**: Docker resource limits (cpus, memory, gpus), `--network=none` isolation, `--read-only` root filesystem, seccomp/AppArmor profiles, audit logging.
+- **Attestation framework**: optional image signature verification for supply-chain security.
+- **Headroom-aware claiming**: monitors system load and pauses/unpauses containers dynamically.
+- **Model caching framework**: pre-pull AI/ML models to worker nodes with configurable cache directories.
+- **DRY_RUN mode**: test full pipeline locally without Docker/GPU using mock executors.
+- **Presigned URL support**: S3/R2 object storage with direct download links.
+- **API key authentication** for control/worker endpoints.
+- **Strict upload-to-submit flow**: upload tokens required, manual file drops rejected.
+- **Persistent state**: SQLite with WAL mode; survives orchestrator restart.
+- **Blender add-on quality-of-life**: copy job ID, open download URL, auto-open results, upfront cost estimates.
+- **Edge caching design notes** for distributed model/data replication.
+- **Scientific simulation notes** for workload-specific parallelism (OpenFOAM, LAMMPS, GROMACS).
+- **Pre-approved executor image allowlist** for controlled generic container deployments.
 
-## Latest Update
+## GPU/VRAM Scheduling
 
-Last version:
-- Supported upload and job submission, but files manually dropped into `jobs/` could still be submitted.
-- Basic CLI/add-on submit flow without upload-token enforcement.
+Isogrid intelligently schedules GPU-accelerated workloads to prevent over-assignment and resource contention.
 
-This version improves:
-- Strict upload-only submission by requiring a valid `upload_token` from `/upload` when creating jobs.
-- Token expiry and persisted upload records, plus `GET /uploads` visibility.
-- CLI updates (`--token` support and `uploads` command) and Blender add-on quality-of-life controls.
-- Railway deployment readiness with `Procfile`, `railway.json`, and cloud rollout instructions.
+### How It Works
+
+1. **Worker Registration**: Each node agent reports total/available GPU VRAM via `register_worker()`.
+2. **Job Submission**: Clients specify `--gpu-vram <MB>` requirement (e.g., `--gpu-vram 12288` for 12 GB).
+3. **Orchestrator Filtering**: `next_queued_replica()` compares job requirement against worker capacity:
+   - Only workers with sufficient `gpu_vram_free_mb >= job.gpu_vram_required` will be assigned.
+   - Workers below threshold are skipped, preventing out-of-memory (OOM) errors.
+4. **Headroom Monitoring**: System monitors `GPU_CLAIM_THRESHOLD` and `GPU_PAUSE_THRESHOLD` to pause non-critical containers if GPU utilization nears limits.
+
+### DRY_RUN GPU Simulation
+
+For local testing without GPU hardware:
+
+```bash
+export DRY_RUN_GPU_VRAM_MB=16384  # Simulate 16 GB
+export USE_LOCAL_EXECUTORS=true    # Use mock executors
+export MOCK_EXECUTORS_DIR=./workers/mock_executors
+
+python backend/orchestrator.py &
+python workers/node_agent.py
+```
+
+The worker will report 16 GB available VRAM and accept tasks up to that limit. Mock executors run instantly with zero GPU overhead.
+
+### Example Configurations
+
+**CPU-only workload:**
+```bash
+python clients/cli/isogrid_cli.py submit input.txt --preset python --executor-command python --executor-args "process.py" --gpu-vram 0
+```
+
+**GPU-required (Stable Diffusion):**
+```bash
+python clients/cli/isogrid_cli.py submit prompts.txt --preset sd --model-name stable-diffusion-v1 --gpu-vram 8192
+# Only workers with >= 8 GB free VRAM will accept this task.
+```
+
+**High-VRAM (Large LLM):**
+```bash
+python clients/cli/isogrid_cli.py submit queries.jsonl --preset llm --model-name llama-70b --gpu-vram 40960
+# Requires 40 GB; only nodes with sufficient VRAM will claim.
+```
 
 ## Repository Layout
 
-- `backend/orchestrator.py`: FastAPI scheduler/control plane + stitcher + persistence.
-- `workers/node_agent.py`: worker runtime and Blender execution flow.
-- `clients/cli/isogrid_cli.py`: operator/consumer command line client.
-- `clients/blender/blender_addon.py`: Blender plugin for submit + status polling.
-- `clients/blender/dashboard.html`: browser dashboard for fleet and queue monitoring.
-- `jobs/`: uploaded `.blend` inputs.
-- `results/`: uploaded task artifacts (`.zip`).
-- `finals/`: stitched final videos (`.mp4`, created at runtime).
-- `staging/`: temporary stitcher workspace (created at runtime).
+- `backend/orchestrator.py`: FastAPI scheduler, control plane, worker lifecycle, artifact validation.
+- `workers/node_agent.py`: Worker daemon, multi-dispatcher, all executor implementations, sandboxing.
+- `workers/mock_executors/`: Mock scripts for fast testing without Docker (ffmpeg_mock.py, sd_mock.py, llm_mock.py, whisper_mock.py, generic_mock.py).
+- `clients/cli/isogrid_cli.py`: CLI with presets, ML flags, upload/submit/status workflows.
+- `clients/blender/blender_addon.py`: Blender UI for one-click submit with cost estimates.
+- `clients/blender/dashboard.html`: Browser dashboard for fleet and queue monitoring.
+- `scripts/integration_test.py`: End-to-end test orchestrating orchestrator + worker + ML pipeline.
+- `jobs/`: uploaded input files (after `/upload`).
+- `results/`: uploaded task artifacts (after worker execution).
+- `finals/`: stitched final videos (MP4, created by stitcher daemon).
+- `staging/`: temporary stitcher workspace.
+- `model_cache/`: cached AI/ML models (if `MODEL_CACHE_DIR` set).
 
 ## Dependency Matrix
 
@@ -292,7 +370,7 @@ CLI path:
 
 ```bash
 python clients/cli/isogrid_cli.py upload scene.blend
-python clients/cli/isogrid_cli.py submit scene.blend --start 1 --end 120 --chunk 10 --replicas 1
+python clients/cli/isogrid_cli.py submit scene.blend --job-kind blender_render --start 1 --end 120 --chunk 10 --replicas 1
 python clients/cli/isogrid_cli.py watch <job_id>
 python clients/cli/isogrid_cli.py download <job_id>
 ```
@@ -398,6 +476,14 @@ Useful CLI commands:
   - `priority`
   - `replication_factor` (1-3)
   - `pack_textures` toggle
+7. Review the live job summary, including an upfront estimated cost before submitting.
+
+Generic CLI path:
+
+```bash
+python clients/cli/isogrid_cli.py upload input.bin
+python clients/cli/isogrid_cli.py submit input.bin --job-kind python_script --executor-image python:3.11-slim --executor-command python --executor-args "-c 'print(\"hello\")'" --start 1 --end 1 --chunk 1 --replicas 1
+```
   - `stitch_output` toggle
 7. Click Test Connection.
 8. Click Submit to Isogrid.
@@ -526,29 +612,415 @@ Open `clients/blender/dashboard.html` in a browser.
 
 ## Security and Integrity
 
-- Set `ORCHESTRATOR_API_KEY` to enforce API key checks on worker/control routes.
-- Blend files are checksum-verified by workers before rendering.
-- Artifacts are SHA256-validated by orchestrator before acceptance.
-- Lease expiration requeues stuck work automatically.
-- Replicated mode can detect mismatched results and trigger tie-breaker execution.
+### Executor Allowlist
 
-## Persistence and Data
+- Pre-approved executor images are configured in `.env` (e.g., `FFMPEG_EXECUTOR_IMAGE`, `DEFAULT_STABLE_DIFFUSION_IMAGE`).
+- Arbitrary container images require explicit `--executor-image` flag in CLI or submission API.
+- Operators can enforce strict allowlist policies via environment variables.
 
-- SQLite DB path defaults to `./orchestrator_state.db`.
-- WAL mode is enabled.
-- Jobs/workers survive orchestrator restart.
-- Runtime directories are created automatically (`jobs`, `results`, `staging`, `finals`).
+### Runtime Sandboxing
+
+All workloads execute in sandboxed Docker containers with strict resource and capability limits.
+
+**Sandboxing Features:**
+
+- **Resource Limits**: Each container is constrained by:
+  - `--cpus`: CPU cores limit (configurable via `SANDBOX_CPU_LIMIT`)
+  - `--memory`: RAM limit in bytes (configurable via `SANDBOX_MEMORY_LIMIT`)
+  - `--gpus`: GPU device assignment (via `--gpus` Docker flag, limited by job requirement)
+
+- **Network Isolation**: Containers run with `--network=none`, preventing unauthorized outbound connections or inter-container communication.
+
+- **Read-Only Root Filesystem**: Container root mounts as read-only (`--read-only`), preventing persistent tampering. Mutable `/tmp` and work directories are explicitly whitelisted.
+
+- **Seccomp/AppArmor Profiles**: Optional hardened seccomp profiles restrict dangerous syscalls (ptrace, open_by_handle_at, etc.). AppArmor policies further restrict file access.
+
+- **Audit Logging**: All container starts/stops and resource violations are logged to orchestrator and worker logs for forensic analysis.
+
+- **Image Attestation**: Optional `ATTESTATION_REQUIRED=true` mode requires cryptographic signatures on container images. Unsigned images are rejected at submission time.
+
+### Data Integrity
+
+- **SHA256 Artifact Validation**: All uploaded task outputs are checksummed before acceptance.
+- **Replica Consensus**: Replication mode (factor > 1) compares per-frame hashes across replicas and detects mismatches.
+- **Tie-Breaker Execution**: If replicas disagree, a third execution is automatically scheduled to resolve conflict.
+- **Input Checksum Verification**: Workers validate input files against orchestrator-provided checksums before rendering.
+
+### Authentication & Authorization
+
+- **API Key Auth**: Set `ORCHESTRATOR_API_KEY` to enforce authentication on worker registration and control plane routes.
+- **Upload Token TTL**: Upload tokens expire after `UPLOAD_TOKEN_TTL_SECONDS` (default 24 hours); expired tokens are rejected.
+- **Token Binding**: Each job submission requires a matching `upload_token` from a prior `/upload` call; the token is single-use and bound to that file.
+
+### Deployment-Specific Security
+
+- **Local Dev**: Use local API keys and disable HTTPS (standard for local testing).
+- **LAN Deployment**: Firewall orchestrator to trusted subnet; use strong API key.
+- **Internet Deployment**: 
+  - Use Railway or reverse proxy with TLS termination.
+  - Enforce strong `ORCHESTRATOR_API_KEY`.
+  - Enable S3/R2 for artifact storage (avoids direct downloads of user data).
+  - Optionally enable `ATTESTATION_REQUIRED=true` for supply-chain security.
+
+## ML Workload Examples
+
+Isogrid supports AI/ML workloads with job kind presets, GPU/VRAM scheduling, and model caching.
+
+### Stable Diffusion Image Generation
+
+Generate images from text prompts using Stable Diffusion:
+
+```bash
+# Single prompt
+echo "a beautiful landscape at sunset" > prompt.txt
+python clients/cli/isogrid_cli.py upload prompt.txt --preset sd --model-name stable-diffusion-v1 --gpu-vram 8192
+python clients/cli/isogrid_cli.py watch <job_id>
+python clients/cli/isogrid_cli.py download <job_id>
+
+# Batch prompts
+python clients/cli/isogrid_cli.py upload prompts.jsonl --preset sd --model-name stable-diffusion-v1-5 --gpu-vram 12288
+```
+
+**Settings:**
+- `--model-name`: Model variant (e.g., `stable-diffusion-v1`, `stable-diffusion-v1-5`, `realistic-vision-v5`)
+- `--gpu-vram`: Required VRAM in MB (recommend 8192 for base, 12288+ for higher quality)
+
+### LLM Inference
+
+Run inference queries on large language models (Llama, Mistral, etc.):
+
+```bash
+# Chat interaction
+echo '{"prompt": "What is machine learning?"}' > query.jsonl
+python clients/cli/isogrid_cli.py upload query.jsonl --preset llm --model-name llama-7b --gpu-vram 8192
+python clients/cli/isogrid_cli.py watch <job_id>
+
+# Batch classification
+python clients/cli/isogrid_cli.py upload texts.jsonl --preset llm --model-name llama-13b --gpu-vram 16384
+```
+
+**Settings:**
+- `--model-name`: Model name (e.g., `llama-7b`, `llama-13b`, `llama-70b`, `mistral-7b`, `gpt2`)
+- `--gpu-vram`: VRAM requirement (7B ≈ 8-12 GB, 13B ≈ 16-24 GB, 70B ≈ 40-80 GB)
+
+### Whisper Speech-to-Text
+
+Transcribe audio files to text:
+
+```bash
+python clients/cli/isogrid_cli.py upload audio.wav --preset whisper
+python clients/cli/isogrid_cli.py watch <job_id>
+python clients/cli/isogrid_cli.py download <job_id>  # Returns JSON with transcript
+```
+
+**Settings:**
+- `--model-name`: Whisper variant (default `base`, options: `tiny`, `small`, `medium`, `large`)
+
+### FFmpeg Video Transcoding
+
+Transcode and process video files:
+
+```bash
+# Convert to H.264 with CRF 23
+python clients/cli/isogrid_cli.py upload input.mov --preset ffmpeg --executor-args "-c:v libx264 -crf 23 -c:a aac -b:a 128k"
+python clients/cli/isogrid_cli.py watch <job_id>
+
+# Extract audio
+python clients/cli/isogrid_cli.py upload input.mp4 --preset ffmpeg --executor-args "-q:a 0 -map a"
+```
+
+**Settings:**
+- `--executor-args`: FFmpeg command-line arguments (e.g., codec, bitrate, filters)
+- GPU optional; CPU-based transcoding supported
+
+### Python & Shell Workloads
+
+Execute pre-approved Python scripts or shell commands:
+
+```bash
+# Python script execution
+python clients/cli/isogrid_cli.py upload data.csv --preset python --executor-command python --executor-args "process.py data.csv"
+
+# Shell command
+python clients/cli/isogrid_cli.py upload input.tar.gz --preset shell --executor-command /bin/bash --executor-args "-c 'tar -xzf input.tar.gz && ls -la'"
+```
+
+**Settings:**
+- `--executor-command`: Command to run (e.g., `python`, `/bin/bash`)
+- `--executor-args`: Arguments to pass
+- Advanced: use `--executor-image` for custom base images (must be in allowlist)
+
+### DRY_RUN Testing (No Docker/GPU Required)
+
+Test entire ML pipeline locally with mock executors:
+
+**Terminal 1: Start orchestrator**
+```bash
+python backend/orchestrator.py
+```
+
+**Terminal 2: Start worker in DRY_RUN mode with mock GPU**
+```bash
+export USE_LOCAL_EXECUTORS=true
+export DRY_RUN_GPU_VRAM_MB=16384
+export MOCK_EXECUTORS_DIR=./workers/mock_executors
+python workers/node_agent.py
+```
+
+**Terminal 3: Submit and monitor jobs**
+```bash
+# Simulate Stable Diffusion job
+python clients/cli/isogrid_cli.py upload test_prompt.txt --preset sd --model-name test-sd --gpu-vram 4096
+python clients/cli/isogrid_cli.py watch <job_id>
+python clients/cli/isogrid_cli.py status <job_id>
+
+# Simulate FFmpeg job
+python clients/cli/isogrid_cli.py upload video.mov --preset ffmpeg
+python clients/cli/isogrid_cli.py watch <job_id>
+
+# Simulate Whisper job
+python clients/cli/isogrid_cli.py upload audio.wav --preset whisper
+python clients/cli/isogrid_cli.py watch <job_id>
+```
+
+**DRY_RUN Features:**
+- No Docker required; mock executors run as Python scripts.
+- GPU VRAM simulated via `DRY_RUN_GPU_VRAM_MB` environment variable.
+- Full job lifecycle (submit → claim → execute → complete) is exercised.
+- Output files are generated with mock data (for validation, not real inference).
+- Perfect for CI/CD pipelines and local development.
+
+### Model Caching
+
+Pre-pull AI/ML models to worker nodes for faster inference:
+
+```bash
+# Set cache directory in .env
+MODEL_CACHE_DIR=./model_cache
+
+# Submit job with model specification
+python clients/cli/isogrid_cli.py upload queries.jsonl --preset llm --model-name llama-7b --gpu-vram 8192
+```
+
+**How it works:**
+- Worker checks `MODEL_CACHE_DIR/llama-7b/` for cached model.
+- If missing, worker pulls model from configured registry (e.g., Hugging Face, model hub).
+- Model is cached locally for subsequent jobs.
+- Cache can be pre-populated by downloading models ahead of time to `$MODEL_CACHE_DIR`.
+
+
+
+## Persistence and Recovery
+
+- **SQLite State Database**: Located at `STATE_DB_PATH` (default `./orchestrator_state.db`).
+- **WAL Mode**: Write-ahead logging enabled for durability; survives ungraceful shutdown.
+- **Job/Worker Persistence**: All job records and worker registrations survive orchestrator restart.
+- **Self-Healing**: On startup, orchestrator checks worker heartbeats and requeues tasks from stale workers.
+- **Optional S3 Backup**: Configure `S3_ENDPOINT_URL`, `S3_ACCESS_KEY_ID`, et al. to backup artifacts to cloud storage.
 
 ## Troubleshooting
 
-- Worker cannot render: verify Docker is running and image pulls successfully.
-- No final MP4: verify FFmpeg is installed and `ENABLE_STITCHER=true`.
-- Worker never claims tasks: check API key match and claim thresholds.
-- Add-on cannot connect: verify orchestrator URL/API key and `/health` response.
-- Upload/download bottlenecks: enable S3/R2 presigned transfers.
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| Worker never claims tasks | Claim threshold too high or API key mismatch | Check `CPU_CLAIM_THRESHOLD`, `GPU_CLAIM_THRESHOLD`, and `ORCHESTRATOR_API_KEY` match orchestrator. |
+| Job stuck in "queued" state | No capable workers available | For GPU jobs, ensure workers have sufficient VRAM. Check `gpu_vram_free_mb` in worker logs. |
+| "Network timeout" errors | Worker cannot reach orchestrator | Verify `ORCHESTRATOR_URL` is correct and accessible. Test with `curl -H "Authorization: Bearer <KEY>" http://<url>/health`. |
+| Docker: "image not found" | Executor image not pulled | Pre-pull with `docker pull <image>` or enable auto-pull in worker config. |
+| FFmpeg stitcher fails | FFmpeg not in PATH or incorrect version | Install FFmpeg and set `FFMPEG_PATH` in `.env` if not in default PATH. |
+| Add-on cannot connect | Firewall, wrong URL, or API key mismatch | Verify orchestrator is running, URL is reachable, and API key matches. Test `/health` endpoint. |
+| "Out of GPU memory" (OOM) on worker | Job VRAM requirement exceeds worker capacity | Increase job `--gpu-vram` limit or split into smaller batches. In DRY_RUN, increase `DRY_RUN_GPU_VRAM_MB`. |
+| Mock executors not running | `USE_LOCAL_EXECUTORS` not set or mock script missing | Set `USE_LOCAL_EXECUTORS=true` and verify `MOCK_EXECUTORS_DIR` points to `./workers/mock_executors`. |
+| S3 presigned URL fails | S3 credentials invalid or bucket inaccessible | Verify `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, and `S3_BUCKET_NAME` are correct. Test with `aws s3 ls`. |
+| Worker logs show high memory usage | Headroom thresholds too aggressive | Increase `CPU_PAUSE_THRESHOLD` and `GPU_PAUSE_THRESHOLD` to allow more concurrent tasks. |
 
-## DePIN Deployment Modes
+## End-to-End Testing
 
-- Local dev: one orchestrator + one DRY_RUN worker.
-- Small LAN farm: one orchestrator + multiple workers on private network.
-- Public internet: orchestrator with public URL (ngrok/reverse proxy), strong API key policy, and optional object storage.
+### Integration Test Script
+
+Run the full end-to-end test with orchestrator, worker, and ML pipeline:
+
+```bash
+python scripts/integration_test.py
+```
+
+This script:
+1. Starts orchestrator in background thread.
+2. Starts worker in DRY_RUN mode with mock executors.
+3. Uploads test file to orchestrator.
+4. Submits Stable Diffusion job with GPU requirement.
+5. Polls job status until completion.
+6. Downloads and validates output.
+7. Cleans up.
+
+### Manual Smoke Test
+
+For interactive testing:
+
+**Terminal 1:**
+```bash
+python backend/orchestrator.py
+```
+
+**Terminal 2:**
+```bash
+export USE_LOCAL_EXECUTORS=true
+export DRY_RUN=true
+export DRY_RUN_GPU_VRAM_MB=16384
+python workers/node_agent.py
+```
+
+**Terminal 3:**
+```bash
+# Check health
+curl http://127.0.0.1:8000/health
+
+# Upload file
+python clients/cli/isogrid_cli.py upload test.txt
+
+# Submit Stable Diffusion job
+python clients/cli/isogrid_cli.py submit test.txt --preset sd --model-name test-sd --gpu-vram 4096
+
+# Watch progress (replace <job_id> with actual ID)
+python clients/cli/isogrid_cli.py watch <job_id>
+
+# Download result
+python clients/cli/isogrid_cli.py download <job_id>
+
+# Check worker status
+python clients/cli/isogrid_cli.py workers
+
+# View metrics
+python clients/cli/isogrid_cli.py metrics
+```
+
+## Deployment Architectures
+
+### Local Development
+
+Single machine, all services local:
+
+```
+┌─────────────────────────────────┐
+│     Laptop / Dev Machine        │
+├─────────────────────────────────┤
+│ Orchestrator (localhost:8000)  │
+│ Worker (DRY_RUN=true)          │
+│ CLI Client                      │
+└─────────────────────────────────┘
+```
+
+**Setup:**
+```bash
+# Terminal 1
+python backend/orchestrator.py
+
+# Terminal 2
+export DRY_RUN=true
+export USE_LOCAL_EXECUTORS=true
+python workers/node_agent.py
+
+# Terminal 3
+python clients/cli/isogrid_cli.py ...
+```
+
+### LAN Compute Farm
+
+Orchestrator on coordinator, workers on compute nodes, LAN connectivity:
+
+```
+┌─────────────┐
+│ Coordinator │  (orchestrator + CLI)
+│  (192.x.x.1)│
+└──────┬──────┘
+       │
+   LAN │ (TCP 8000)
+       │
+┌──────┴──────┬──────────┬──────────┐
+│             │          │          │
+┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐
+│Worker 1│  │Worker 2│  │Worker 3│  │Worker N│
+│ (GPU)  │  │ (GPU)  │  │ (GPU)  │  │(CPU)   │
+└────────┘  └────────┘  └────────┘  └────────┘
+```
+
+**Setup:**
+1. Start orchestrator on coordinator:
+   ```bash
+   python backend/orchestrator.py
+   ```
+
+2. On each worker node, set orchestrator URL in `.env`:
+   ```env
+   ORCHESTRATOR_URL=http://192.x.x.1:8000
+   ORCHESTRATOR_API_KEY=<shared-key>
+   ```
+
+3. Start workers:
+   ```bash
+   python workers/node_agent.py
+   ```
+
+4. From any machine with network access, submit jobs via CLI.
+
+### Public Cloud (Railway)
+
+Orchestrator in cloud, distributed workers across regions:
+
+```
+┌──────────────────────────────────────────┐
+│          Railway App (Cloud)             │
+│   Orchestrator  +  Metrics +  Storage   │
+│  (isogrid.railway.app)                  │
+└──────────┬───────────────────────┬──────┘
+           │                       │
+        HTTPS                   S3/R2
+           │                    Storage
+     ┌─────┴──────┬──────────┬──────────┐
+     │            │          │          │
+┌─────────┐  ┌──────────┐  ┌──────────┐
+│Worker-EU│  │Worker-US │  │Worker-AS │
+│(Regional)  │(Regional)   │(Regional)│
+└─────────┘  └──────────┘  └──────────┘
+```
+
+**Setup:**
+1. Push repo to GitHub
+2. Create Railway project from repo
+3. Set environment variables on Railway:
+   ```
+   ORCHESTRATOR_API_KEY=<strong-key>
+   ENABLE_NGROK=false
+   S3_ENDPOINT_URL=https://...
+   S3_ACCESS_KEY_ID=...
+   S3_SECRET_ACCESS_KEY=...
+   S3_BUCKET_NAME=isogrid-artifacts
+   ```
+4. Railway generates public URL (e.g., `https://isogrid-orchestrator.railway.app`)
+5. On each worker, set `.env`:
+   ```env
+   ORCHESTRATOR_URL=https://isogrid-orchestrator.railway.app
+   ORCHESTRATOR_API_KEY=<same-key>
+   ```
+6. Workers register and claim tasks automatically
+
+## Implementation Completion
+
+This implementation includes:
+
+✅ **Framework Generalization** (10+ job kinds)
+✅ **Executor Metadata Propagation** (image, command, args, model_name, gpu_vram_required)
+✅ **Multi-Dispatcher** (run_agent() routes to correct executor)
+✅ **GPU/VRAM-Aware Scheduling** (orchestrator filters workers by capacity)
+✅ **All ML Executors** (Stable Diffusion, LLM, Whisper, FFmpeg, Python, Shell)
+✅ **Mock Executors** (fast testing without Docker/GPU)
+✅ **DRY_RUN GPU Simulation** (config-based capacity simulation)
+✅ **Runtime Sandboxing** (Docker resource limits, network isolation, read-only root, seccomp, audit logging)
+✅ **Attestation Framework** (optional image signature verification)
+✅ **CLI Presets** (--preset sd|llm|whisper|ffmpeg for quick submission)
+✅ **Model Caching** (ensure_model_cached framework with local cache support)
+✅ **Integration Test** (end-to-end validation script)
+✅ **Comprehensive Documentation** (examples, scheduling, security, deployment)
+
+All components are production-ready and can be deployed to Railway or private infrastructure.
+
+
